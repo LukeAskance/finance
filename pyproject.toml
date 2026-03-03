@@ -1,0 +1,9 @@
+[project]
+name = "money"
+version = "0.1.0"
+description = "Going to build a portfolio GUI based upon SchwabAPI"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "requests>=2.32.5",
+]
