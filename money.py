@@ -6,6 +6,7 @@ import os
 import sys
 import time
 import subprocess
+from contextlib import suppress
 from typing import Any
 from dotenv import load_dotenv
 
@@ -267,120 +268,140 @@ def unaggregate_click():
     )
 
 
-""" with ui.card():
-    ui.label('Automation Dashboard')
-    ui.button('Clean Files', on_click=lambda: run_task('clean.py'))
-    ui.button('Backup Data', on_click=lambda: run_task('backup.py'))
-    ui.button('Generate Reports', on_click=lambda: run_task('report.py'))
+async def exit_app_click():
+    ui.notify('Closing browser tab and exiting...', color='warning')
+    with suppress(Exception):
+        await ui.run_javascript('window.open("", "_self");window.close();')
 
-with ui.card():
-    ui.label('System Status').classes('text-xl font-semibold')
-    ui.button('Run Job').classes('bg-green-600 text-white px-4 py-2')
- """
+    loop = asyncio.get_running_loop()
+    loop.call_later(0.2, lambda: os._exit(0))
 
 
-with ui.row().classes('w-full items-start gap-4 no-wrap'):
-    with ui.column().classes('w-1/3 min-w-[360px]'):
+with ui.tabs().classes('w-full') as tabs:
+    dashboard_tab = ui.tab('Dashboard')
+    portfolio_tab = ui.tab('Portfolio')
+    analysis_tab = ui.tab('Analysis')
+
+with ui.tab_panels(tabs, value=portfolio_tab).classes('w-full'):
+    with ui.tab_panel(dashboard_tab):
         with ui.card().classes('w-full'):
-            ui.label('Schwab Quote').classes('text-xl font-semibold')
-            symbol_input = ui.input('Symbol').props('clearable').classes('w-40')
-            ui.button('Get Quote', on_click=get_quote_click)
-            load_portfolio_button = ui.button(
-                'Load Portfolio',
-                on_click=load_portfolio_click,
-            )
-            ui.button('aggregate', on_click=aggregate_click)
-            ui.button('unaggregate', on_click=unaggregate_click)
+            ui.label('Dashboard').classes('text-xl font-semibold')
+            ui.button('Exit Application', on_click=exit_app_click)
 
-            with ui.row():
-                ui.label('Symbol:')
-                symbol_value = ui.label('-').classes('font-semibold')
-                ui.label('Last:')
-                last_value = ui.label('-').classes('font-semibold')
-                ui.label('Bid:')
-                bid_value = ui.label('-').classes('font-semibold')
-                ui.label('Ask:')
-                ask_value = ui.label('-').classes('font-semibold')
+    with ui.tab_panel(portfolio_tab):
+        with ui.row().classes('w-full items-start gap-4 no-wrap'):
+            with ui.column().classes('w-1/3 min-w-[360px]'):
+                with ui.card().classes('w-full'):
+                    ui.label('Schwab Quote').classes('text-xl font-semibold')
+                    symbol_input = ui.input('Symbol').props(
+                        'clearable'
+                    ).classes('w-40')
+                    ui.button('Get Quote', on_click=get_quote_click)
+                    load_portfolio_button = ui.button(
+                        'Load Portfolio',
+                        on_click=load_portfolio_click,
+                    )
+                    ui.button('aggregate', on_click=aggregate_click)
+                    ui.button('unaggregate', on_click=unaggregate_click)
 
-            with ui.row():
-                ui.label('Open:')
-                open_value = ui.label('-').classes('font-semibold')
-                ui.label('High:')
-                high_value = ui.label('-').classes('font-semibold')
-                ui.label('Low:')
-                low_value = ui.label('-').classes('font-semibold')
-                ui.label('Close:')
-                close_value = ui.label('-').classes('font-semibold')
+                    with ui.row():
+                        ui.label('Symbol:')
+                        symbol_value = ui.label('-').classes('font-semibold')
+                        ui.label('Last:')
+                        last_value = ui.label('-').classes('font-semibold')
+                        ui.label('Bid:')
+                        bid_value = ui.label('-').classes('font-semibold')
+                        ui.label('Ask:')
+                        ask_value = ui.label('-').classes('font-semibold')
 
-            quote_output = ui.textarea(label='Quote JSON')
-            quote_output.props('readonly').classes('w-full')
+                    with ui.row():
+                        ui.label('Open:')
+                        open_value = ui.label('-').classes('font-semibold')
+                        ui.label('High:')
+                        high_value = ui.label('-').classes('font-semibold')
+                        ui.label('Low:')
+                        low_value = ui.label('-').classes('font-semibold')
+                        ui.label('Close:')
+                        close_value = ui.label('-').classes('font-semibold')
 
-    with ui.column().classes('flex-1 min-w-0'):
+                    quote_output = ui.textarea(label='Quote JSON')
+                    quote_output.props('readonly').classes('w-full')
+
+            with ui.column().classes('flex-1 min-w-0'):
+                with ui.card().classes('w-full'):
+                    ui.label('Portfolio').classes('text-xl font-semibold')
+                    portfolio_columns = [
+                        {
+                            'name': 'symbol',
+                            'label': 'Symbol',
+                            'field': 'symbol',
+                            'sortable': True,
+                            'style': 'width: 10ch; max-width: 10ch;',
+                        },
+                        {
+                            'name': 'type',
+                            'label': 'Type',
+                            'field': 'type',
+                            'sortable': True,
+                        },
+                        {
+                            'name': 'account',
+                            'label': 'Account',
+                            'field': 'account',
+                            'sortable': True,
+                        },
+                        {
+                            'name': 'underlying',
+                            'label': 'Underlying',
+                            'field': 'underlying',
+                            'sortable': True,
+                        },
+                        {
+                            'name': 'quantity',
+                            'label': 'Qty',
+                            'field': 'quantity',
+                            'sortable': True,
+                            'align': 'right',
+                        },
+                        {
+                            'name': 'last',
+                            'label': 'Last',
+                            'field': 'last',
+                            'sortable': True,
+                            'align': 'right',
+                        },
+                        {
+                            'name': 'market_value',
+                            'label': 'Mkt Value',
+                            'field': 'market_value',
+                            'sortable': True,
+                            'align': 'right',
+                        },
+                        {
+                            'name': 'pl',
+                            'label': 'P/L',
+                            'field': 'pl',
+                            'sortable': True,
+                            'align': 'right',
+                        },
+                    ]
+                    with ui.element('div').classes(
+                        'w-full max-h-[75vh] overflow-auto'
+                    ):
+                        portfolio_table = ui.table(
+                            columns=portfolio_columns,
+                            rows=[],
+                        ).classes('w-max min-w-full')
+                    portfolio_table.props(
+                        (
+                            'pagination={"rowsPerPage":0} '
+                            'rows-per-page-options="[0]"'
+                        )
+                    )
+
+    with ui.tab_panel(analysis_tab):
         with ui.card().classes('w-full'):
-            ui.label('Portfolio').classes('text-xl font-semibold')
-            portfolio_columns = [
-                {
-                    'name': 'symbol',
-                    'label': 'Symbol',
-                    'field': 'symbol',
-                    'sortable': True,
-                    'style': 'width: 10ch; max-width: 10ch;',
-                },
-                {
-                    'name': 'type',
-                    'label': 'Type',
-                    'field': 'type',
-                    'sortable': True,
-                },
-                {
-                    'name': 'account',
-                    'label': 'Account',
-                    'field': 'account',
-                    'sortable': True,
-                },
-                {
-                    'name': 'underlying',
-                    'label': 'Underlying',
-                    'field': 'underlying',
-                    'sortable': True,
-                },
-                {
-                    'name': 'quantity',
-                    'label': 'Qty',
-                    'field': 'quantity',
-                    'sortable': True,
-                    'align': 'right',
-                },
-                {
-                    'name': 'last',
-                    'label': 'Last',
-                    'field': 'last',
-                    'sortable': True,
-                    'align': 'right',
-                },
-                {
-                    'name': 'market_value',
-                    'label': 'Mkt Value',
-                    'field': 'market_value',
-                    'sortable': True,
-                    'align': 'right',
-                },
-                {
-                    'name': 'pl',
-                    'label': 'P/L',
-                    'field': 'pl',
-                    'sortable': True,
-                    'align': 'right',
-                },
-            ]
-            with ui.element('div').classes('w-full max-h-[75vh] overflow-auto'):
-                portfolio_table = ui.table(
-                    columns=portfolio_columns,
-                    rows=[],
-                ).classes('w-max min-w-full')
-            portfolio_table.props(
-                'pagination={"rowsPerPage":0} rows-per-page-options="[0]"'
-            )
+            ui.label('Analysis').classes('text-xl font-semibold')
 
 
 ui.run(port=8000, reload=False, )
