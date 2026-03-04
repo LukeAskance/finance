@@ -4,9 +4,30 @@ from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Optional, Protocol, cast
 from datetime import date, datetime
+from tempfile import TemporaryDirectory
+import logging
+import json
 import csv
 import glob
 import os
+import sys
+from dotenv import load_dotenv
+
+from schwab_api import SchwabAPI
+
+
+logger = logging.getLogger(__name__)
+
+SchwabClient: Any = None
+_schwab_import_error: Optional[Exception] = None
+try:
+    from schwabdev.client import Client as ImportedSchwabClient
+    SchwabClient = ImportedSchwabClient
+except ImportError as exc:
+    _schwab_import_error = exc
+
+
+load_dotenv()
 
 
 DEFAULT_ACCOUNT_MAPPING = {
@@ -656,6 +677,10 @@ def _build_position_from_seed(
         return _build_option_position_from_seed(api, seed, gabby=gabby)
 
     q_dict, fun_dict = api.get_quote_and_fundamentals(seed.symbol, gabby=gabby)
+
+    logger.info(f"Building position for {seed.symbol} with qdict={q_dict} and "
+                f"fundamentals={fun_dict}")
+
     q_dict = q_dict or {}
     fun_dict = fun_dict or {}
 
@@ -806,3 +831,262 @@ def as_dict(position: PortfolioPosition) -> dict[str, Any]:
         "ask": position.ask,
         "mark_percentage_change": position.mark_percentage_change,
     }
+
+
+def test_load_portfolio_positions() -> None:
+    class MockAPI:
+        def get_linked_accounts(self) -> list[dict[str, Any]]:
+            return [{"accountNumber": "89958151", "hashValue": "abc"}]
+
+        def get_account_details(
+            self,
+            account_hash: str,
+            fields: str = "positions",
+        ) -> dict[str, Any]:
+            assert account_hash == "abc"
+            assert fields == "positions"
+            return {
+                "securitiesAccount": {
+                    "currentBalances": {"cashBalance": 1234.56},
+                    "positions": [
+                        {
+                            "instrument": {
+                                "symbol": "MSFT",
+                                "description": "Microsoft Corp",
+                                "assetType": "EQUITY",
+                            },
+                            "longQuantity": 10,
+                            "averageLongPrice": 100.0,
+                        },
+                        {
+                            "instrument": {
+                                "symbol": "MSFT  260619C00500000",
+                                "description": "MSFT Jun 19 2026 500 Call",
+                                "assetType": "OPTION",
+                            },
+                            "longQuantity": 1,
+                            "averageLongPrice": 8.0,
+                            "averagePrice": 8.0,
+                        },
+                    ],
+                }
+            }
+
+        def get_quote_and_fundamentals(
+            self,
+            symbol: str,
+            gabby: bool = False,
+        ) -> tuple[Optional[dict[str, Any]], Optional[dict[str, Any]]]:
+            if symbol == "MSFT":
+                return (
+                    {
+                        "lastPrice": 110.0,
+                        "52WeekHigh": 120.0,
+                        "52WeekLow": 80.0,
+                    },
+                    {
+                        "divPayAmount": 0.75,
+                        "divFreq": 4,
+                        "divYield": 2.1,
+                        "peRatio": 30.0,
+                        "eps": 11.0,
+                    },
+                )
+            return None, None
+
+        def get_quote(
+            self,
+            symbol: str,
+            gabby: bool = False,
+        ) -> Optional[dict[str, Any]]:
+            if symbol == "MSFT  260619C00500000":
+                return {
+                    symbol: {
+                        "quote": {
+                            "lastPrice": 9.0,
+                            "mark": 9.25,
+                            "bidPrice": 9.1,
+                            "askPrice": 9.4,
+                            "strikePrice": 500.0,
+                            "daysToExpiration": 100,
+                            "underlyingPrice": 110.0,
+                            "putCall": "CALL",
+                            "markPercentChange": 1.25,
+                        }
+                    }
+                }
+            return {}
+
+    with TemporaryDirectory() as tmp_dir:
+        csv_path = os.path.join(tmp_dir, "Portfolio_test.csv")
+        with open(csv_path, "w", newline="") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=[
+                    "Symbol",
+                    "Description",
+                    "Current Value",
+                    "Quantity",
+                    "Average Cost Basis",
+                ],
+            )
+            writer.writeheader()
+            writer.writerow(
+                {
+                    "Symbol": "CORE**",
+                    "Description": "Cash",
+                    "Current Value": "$250.00",
+                    "Quantity": "250.00",
+                    "Average Cost Basis": "$1.00",
+                }
+            )
+            writer.writerow(
+                {
+                    "Symbol": "AAPL",
+                    "Description": "AAPL Apple Inc",
+                    "Current Value": "$1000.00",
+                    "Quantity": "5",
+                    "Average Cost Basis": "$150.00",
+                }
+            )
+            writer.writerow(
+                {
+                    "Symbol": "AAPLOPT1234",
+                    "Description": "AAPL JUN 19 2026 $200 CALL",
+                    "Current Value": "$100.00",
+                    "Quantity": "1",
+                    "Average Cost Basis": "$5.00",
+                }
+            )
+
+        positions = load_portfolio_positions(
+            api=MockAPI(),
+            include_fidelity=True,
+            fidelity_search_dir=tmp_dir,
+            include_options=True,
+            include_cash=True,
+        )
+
+    assert positions, "Expected portfolio positions to be loaded"
+    assert any(p.symbol == "MSFT" for p in positions)
+    assert any(p.position_type in {"CALL", "PUT", "OPTION"} for p in positions)
+    assert any(p.position_type == "Cash" for p in positions)
+
+
+def get_client() -> Any:
+    if SchwabClient is None:
+        logger.error("schwabdev import failed: %s", _schwab_import_error)
+        raise RuntimeError(
+            f"schwabdev import failed: {_schwab_import_error}"
+        )
+
+    app_key = os.getenv("SCHWAB_APP_KEY")
+    app_secret = os.getenv("SCHWAB_SECRET")
+    callback_url = os.getenv("callback_url")
+    token_filename = os.getenv("token_filename")
+
+    missing = [
+        name
+        for name, value in [
+            ("SCHWAB_APP_KEY", app_key),
+            ("SCHWAB_SECRET", app_secret),
+            ("callback_url", callback_url),
+            ("token_filename", token_filename),
+        ]
+        if not value
+    ]
+
+    logger.info(f"Missing environment variables: {', '.join(missing)}") if missing else logger.info("All required environment variables are set")
+    if missing:
+        logger.error(
+            "Missing required environment variable(s): %s",
+            ", ".join(missing),
+        )
+        raise RuntimeError(
+            "Missing required environment variable(s): "
+            f"{', '.join(missing)}. "
+            "Set them in your .env file or shell environment."
+        )
+
+    logger.info("Creating Schwab client from environment configuration")
+
+    return SchwabClient(
+        app_key,
+        app_secret,
+        callback_url,
+        token_filename,
+    )
+
+
+def load_live_portfolio(
+    include_fidelity: bool = True,
+    fidelity_search_dir: str = "~/Downloads",
+    include_options: bool = True,
+    include_cash: bool = True,
+) -> list[PortfolioPosition]:
+    logger.info(
+        (
+            "Loading live portfolio include_fidelity=%s "
+            "include_options=%s include_cash=%s"
+        ),
+        include_fidelity,
+        include_options,
+        include_cash,
+    )
+    api = SchwabAPI(get_client())
+    positions = load_portfolio_positions(
+        api=api,
+        include_fidelity=include_fidelity,
+        fidelity_search_dir=fidelity_search_dir,
+        include_options=include_options,
+        include_cash=include_cash,
+    )
+    logger.info("Loaded %d portfolio positions", len(positions))
+    return positions
+
+
+def print_live_portfolio_summary(positions: list[PortfolioPosition]) -> None:
+    summary = {
+        "count": len(positions),
+        "equity_count": len(
+            [
+                p
+                for p in positions
+                if p.position_type
+                in {"EQUITY", "MUTUAL_FUND", "COLLECTIVE_INVESTMENT"}
+            ]
+        ),
+        "option_count": len(
+            [
+                p
+                for p in positions
+                if p.position_type in {"CALL", "PUT", "OPTION"}
+            ]
+        ),
+        "cash_count": len([p for p in positions if p.position_type == "Cash"]),
+        "total_market_value": round(
+            sum(float(p.market_value) for p in positions),
+            2,
+        ),
+    }
+
+    print(json.dumps(summary, indent=2))
+
+
+if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    try:
+        if "--test" in sys.argv:
+            logger.info("Running test_load_portfolio_positions")
+            test_load_portfolio_positions()
+            logger.info("test_load_portfolio_positions: PASS")
+            print("test_load_portfolio_positions: PASS")
+        else:
+            live_positions = load_live_portfolio()
+            print_live_portfolio_summary(live_positions)
+    except Exception:
+        logger.exception("positions.py execution failed")
+        raise

@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 
 from nicegui import ui
 from schwab_api import SchwabAPI
+from positions import load_portfolio_positions
 
 try:
     from schwabdev.client import Client as _SchwabClient
@@ -36,7 +37,6 @@ def getClient():
         os.getenv('callback_url'),
         os.getenv('token_filename'),
     )
-
 
 
 def generate_report():
@@ -68,6 +68,45 @@ def get_api() -> SchwabAPI:
 
 def fetch_quote(symbol: str) -> dict[str, Any] | None:
     return get_api().get_quote(symbol.upper())
+
+
+def fetch_portfolio_rows() -> list[dict[str, Any]]:
+    positions = load_portfolio_positions(get_api())
+
+    def _underlying_symbol(value: Any) -> str:
+        if isinstance(value, str):
+            return value
+        return str(getattr(value, 'symbol', value))
+
+    rows = [
+        {
+            'symbol': p.symbol,
+            'type': p.position_type,
+            'broker': p.broker,
+            'account': p.account_name,
+            'underlying': _underlying_symbol(p.underlying),
+            'quantity': round(float(p.quantity), 4),
+            'last': round(float(p.last_price), 4),
+            'market_value': round(float(p.market_value), 2),
+            'pl': round(float(p.pl_total), 2),
+        }
+        for p in positions
+    ]
+
+    def _market_value_for_sort(row: dict[str, Any]) -> float:
+        value = row.get('market_value', 0.0)
+        if isinstance(value, (int, float, str)):
+            try:
+                return float(value)
+            except ValueError:
+                return 0.0
+        return 0.0
+
+    rows.sort(
+        key=_market_value_for_sort,
+        reverse=True,
+    )
+    return rows
 
 
 def set_quote_summary(
@@ -141,7 +180,22 @@ async def get_quote_click():
         quote_output.value = f'Quote error: {exc}'
 
 
-with ui.card():
+async def load_portfolio_click():
+    load_portfolio_button.disable()
+    load_portfolio_button.text = 'Loading...'
+    try:
+        rows = await asyncio.to_thread(fetch_portfolio_rows)
+        portfolio_table.rows = rows
+        portfolio_table.update()
+        ui.notify(f'Loaded {len(rows)} portfolio rows', color='positive')
+    except Exception as exc:
+        ui.notify(f'Portfolio load failed: {exc}', color='negative')
+    finally:
+        load_portfolio_button.text = 'Load Portfolio'
+        load_portfolio_button.enable()
+
+
+""" with ui.card():
     ui.label('Automation Dashboard')
     ui.button('Clean Files', on_click=lambda: run_task('clean.py'))
     ui.button('Backup Data', on_click=lambda: run_task('backup.py'))
@@ -150,11 +204,17 @@ with ui.card():
 with ui.card():
     ui.label('System Status').classes('text-xl font-semibold')
     ui.button('Run Job').classes('bg-green-600 text-white px-4 py-2')
+ """
+
 
 with ui.card():
     ui.label('Schwab Quote').classes('text-xl font-semibold')
     symbol_input = ui.input('Symbol').props('clearable').classes('w-40')
     ui.button('Get Quote', on_click=get_quote_click)
+    load_portfolio_button = ui.button(
+        'Load Portfolio',
+        on_click=load_portfolio_click,
+    )
 
     with ui.row():
         ui.label('Symbol:')
@@ -178,6 +238,70 @@ with ui.card():
 
     quote_output = ui.textarea(label='Quote JSON')
     quote_output.props('readonly').classes('w-full')
+
+    portfolio_columns = [
+        {
+            'name': 'symbol',
+            'label': 'Symbol',
+            'field': 'symbol',
+            'sortable': True,
+        },
+        {'name': 'type', 'label': 'Type', 'field': 'type', 'sortable': True},
+        {
+            'name': 'broker',
+            'label': 'Broker',
+            'field': 'broker',
+            'sortable': True,
+        },
+        {
+            'name': 'account',
+            'label': 'Account',
+            'field': 'account',
+            'sortable': True,
+        },
+        {
+            'name': 'underlying',
+            'label': 'Underlying',
+            'field': 'underlying',
+            'sortable': True,
+        },
+        {
+            'name': 'quantity',
+            'label': 'Qty',
+            'field': 'quantity',
+            'sortable': True,
+            'align': 'right',
+        },
+        {
+            'name': 'last',
+            'label': 'Last',
+            'field': 'last',
+            'sortable': True,
+            'align': 'right',
+        },
+        {
+            'name': 'market_value',
+            'label': 'Mkt Value',
+            'field': 'market_value',
+            'sortable': True,
+            'align': 'right',
+        },
+        {
+            'name': 'pl',
+            'label': 'P/L',
+            'field': 'pl',
+            'sortable': True,
+            'align': 'right',
+        },
+    ]
+    with ui.element('div').classes('w-full max-h-96 overflow-auto'):
+        portfolio_table = ui.table(
+            columns=portfolio_columns,
+            rows=[],
+        ).classes('w-max min-w-full')
+    portfolio_table.props(
+        'pagination={"rowsPerPage":0} rows-per-page-options="[0]"'
+    )
 
 
 ui.run(port=8000, reload=False, )

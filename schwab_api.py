@@ -1,13 +1,15 @@
 # * (c) 1066-2050 George... Flammer All Rights Reserved
-"""schwab_api.py — single point of contact for 
+"""schwab_api.py — single point of contact for
     all Schwab REST + streaming calls.
 """
 
 import json
+import logging
 from datetime import datetime
-from typing import Optional, Tuple, Dict, List
+from typing import Optional, Tuple
 
-import c
+
+logger = logging.getLogger(__name__)
 
 
 class SchwabAPI:
@@ -43,7 +45,7 @@ class SchwabAPI:
         r = self.client.quote(symbol)
         if r.status_code == 404:
             if gabby:
-                c.red(f"get_quote({symbol}) got 404")
+                logger.warning("get_quote(%s) got 404", symbol)
             return {}
 
         return r.json()
@@ -62,18 +64,28 @@ class SchwabAPI:
         r = self.client.quote(symbol)
         if r.status_code == 404:
             if gabby:
-                c.red(
-                    f"get_quote_and_fundamentals:: 404 response to quote({symbol}) request."
+                logger.warning(
+                    "get_quote_and_fundamentals: 404 response to quote(%s)",
+                    symbol,
                 )
             return None, None
 
         response_data = r.json()
 
+        if symbol not in response_data:
+            if gabby:
+                logger.warning(
+                    "get_quote_and_fundamentals: symbol %s not in response",
+                    symbol,
+                )
+            return None, None
+
         if gabby:
-            c.bold(symbol)
-            c.green(json.dumps(response_data[symbol], indent=4))
-            c.red(
-                f"Quote data:\n{json.dumps(response_data[symbol]['quote'], indent=4)}"
+            logger.info("Quote payload for %s", symbol)
+            logger.debug(json.dumps(response_data[symbol], indent=4))
+            logger.debug(
+                "Quote data:\n%s",
+                json.dumps(response_data[symbol]["quote"], indent=4),
             )
 
         qDict = response_data[symbol]["quote"]
@@ -102,7 +114,7 @@ class SchwabAPI:
         )
         if r.status_code == 404:
             if gabby:
-                c.red(f"get_price_history({symbol}) got 404")
+                logger.warning("get_price_history(%s) got 404", symbol)
             return None
 
         return r.json()
