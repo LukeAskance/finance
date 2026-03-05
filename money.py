@@ -63,6 +63,10 @@ def run_task(script: str):
 
 api: SchwabAPI | None = None
 original_portfolio_rows: list[dict[str, Any]] = []
+raw_chain_data: dict[str, Any] | None = None
+pending_chain_render_task: asyncio.Task[Any] | None = None
+chain_dte_min: int | None = None
+chain_dte_max: int | None = None
 
 
 def get_api() -> SchwabAPI:
@@ -82,6 +86,135 @@ def fetch_chain(symbol: str, contract_type: str) -> dict[str, Any]:
         name=symbol.upper(),
         put_or_call=contract_type,
     )
+
+
+def _coerce_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    try:
+        text = str(value).strip()
+        if not text:
+            return None
+        return int(float(text))
+    except (TypeError, ValueError):
+        return None
+
+
+def _dte_from_exp_key(exp_key: str) -> int | None:
+    if ':' not in exp_key:
+        return None
+    return _coerce_int(exp_key.rsplit(':', 1)[-1])
+
+
+def _extract_chain_dte_values(chain: dict[str, Any]) -> list[int]:
+    dte_values: list[int] = []
+    for map_name in ('callExpDateMap', 'putExpDateMap'):
+        exp_map = chain.get(map_name, {}) or {}
+        for exp_key, strikes in exp_map.items():
+            if (exp_key_dte := _dte_from_exp_key(exp_key)) is not None:
+                dte_values.append(exp_key_dte)
+            for _, contracts in (strikes or {}).items():
+                for contract in contracts or []:
+                    dte = _coerce_int(contract.get('daysToExpiration'))
+                    if dte is not None:
+                        dte_values.append(dte)
+    return dte_values
+
+
+def _filter_chain_by_dte(
+    chain: dict[str, Any],
+    dte_limit: int,
+) -> dict[str, Any]:
+    filtered: dict[str, Any] = {
+        key: value
+        for key, value in chain.items()
+        if key not in {'callExpDateMap', 'putExpDateMap'}
+    }
+
+    for map_name in ('callExpDateMap', 'putExpDateMap'):
+        exp_map = chain.get(map_name, {}) or {}
+        new_exp_map: dict[str, Any] = {}
+        for exp_key, strikes in exp_map.items():
+            exp_key_dte = _dte_from_exp_key(exp_key)
+            new_strikes: dict[str, Any] = {}
+            for strike_key, contracts in (strikes or {}).items():
+                kept = [
+                    contract
+                    for contract in (contracts or [])
+                    if (
+                        (
+                            dte := _coerce_int(contract.get('daysToExpiration'))
+                            or exp_key_dte
+                        )
+                        is not None
+                        and dte <= dte_limit
+                    )
+                ]
+                if kept:
+                    new_strikes[strike_key] = kept
+            if new_strikes:
+                new_exp_map[exp_key] = new_strikes
+        filtered[map_name] = new_exp_map
+
+    return filtered
+
+
+async def _render_filtered_chain() -> None:
+    if raw_chain_data is None:
+        return
+
+    dte_limit = _coerce_int(chain_dte_input.value)
+    if dte_limit is None:
+        return
+
+    if chain_dte_min is not None and dte_limit < chain_dte_min:
+        chain_output.value = (
+            f'DTE must be >= {chain_dte_min} '
+            f'and <= {chain_dte_max}'
+        )
+        return
+
+    if chain_dte_max is not None and dte_limit > chain_dte_max:
+        chain_output.value = (
+            f'DTE must be >= {chain_dte_min} '
+            f'and <= {chain_dte_max}'
+        )
+        return
+
+    chain_dte_value_label.text = f'DTE <= {dte_limit}'
+    filtered = await asyncio.to_thread(
+        _filter_chain_by_dte,
+        raw_chain_data,
+        dte_limit,
+    )
+    chain_output.value = await asyncio.to_thread(
+        lambda: json.dumps(filtered, indent=2)
+    )
+
+
+def schedule_chain_render() -> None:
+    global pending_chain_render_task
+
+    if (
+        pending_chain_render_task is not None
+        and not pending_chain_render_task.done()
+    ):
+        pending_chain_render_task.cancel()
+
+    async def _debounced_render() -> None:
+        try:
+            await asyncio.sleep(0.12)
+            await _render_filtered_chain()
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            chain_output.value = f'Chain render error: {exc}'
+
+    pending_chain_render_task = asyncio.create_task(_debounced_render())
 
 
 def fetch_portfolio_rows() -> list[dict[str, Any]]:
@@ -235,6 +368,7 @@ async def get_quote_click():
 
 
 async def get_chain_click():
+    global raw_chain_data, pending_chain_render_task, chain_dte_min, chain_dte_max
     symbol = chain_symbol_input.value.strip()
     if not symbol:
         ui.notify('Enter a ticker symbol first', color='warning')
@@ -244,9 +378,57 @@ async def get_chain_click():
     chain_output.value = 'Loading...'
     try:
         chain = await asyncio.to_thread(fetch_chain, symbol, contract_type)
-        chain_output.value = json.dumps(chain, indent=2)
+        if not isinstance(chain, dict):
+            raw_chain_data = None
+            chain_dte_min = None
+            chain_dte_max = None
+            chain_dte_value_label.text = 'DTE <= -'
+            chain_output.value = f'Chain error: unexpected response type {type(chain).__name__}'
+            return
+
+        raw_chain_data = chain
+
+        dte_values = _extract_chain_dte_values(chain)
+        if dte_values:
+            chain_dte_min = min(dte_values)
+            chain_dte_max = max(dte_values)
+            chain_dte_input.value = str(chain_dte_max)
+            chain_dte_value_label.text = f'DTE <= {chain_dte_max}'
+            schedule_chain_render()
+        else:
+            chain_dte_min = None
+            chain_dte_max = None
+            chain_dte_input.value = '365'
+            chain_dte_value_label.text = 'DTE <= -'
+            chain_output.value = json.dumps(chain, indent=2)
     except Exception as exc:
+        raw_chain_data = None
+        chain_dte_min = None
+        chain_dte_max = None
+        if (
+            pending_chain_render_task is not None
+            and not pending_chain_render_task.done()
+        ):
+            pending_chain_render_task.cancel()
+        chain_dte_input.value = '365'
+        chain_dte_value_label.text = 'DTE <= -'
         chain_output.value = f'Chain error: {exc}'
+
+
+def on_chain_dte_change(_: Any = None) -> None:
+    value = _coerce_int(chain_dte_input.value)
+    if value is None:
+        chain_dte_value_label.text = 'Enter a valid integer DTE'
+        return
+
+    if chain_dte_min is not None and chain_dte_max is not None:
+        if value < chain_dte_min or value > chain_dte_max:
+            chain_dte_value_label.text = (
+                f'Enter {chain_dte_min}..{chain_dte_max}'
+            )
+            return
+
+    schedule_chain_render()
 
 
 async def load_portfolio_click():
@@ -428,20 +610,38 @@ with ui.tab_panels(tabs, value=portfolio_tab).classes('w-full'):
                     )
 
     with ui.tab_panel(options_tab):
-        with ui.card().classes('w-full'):
-            ui.label('Options Chain').classes('text-xl font-semibold')
-            with ui.row().classes('items-end gap-2'):
-                chain_symbol_input = ui.input('Symbol').props(
-                    'clearable'
-                ).classes('w-40')
-                chain_contract_type = ui.select(
-                    options=['ALL', 'CALL', 'PUT'],
-                    value='ALL',
-                    label='Contract Type',
-                ).classes('w-40')
-            ui.button('Get Chain', on_click=get_chain_click)
-            chain_output = ui.textarea(label='Chain JSON')
-            chain_output.props('readonly').classes('w-full')
+        with ui.row().classes('w-full items-start gap-4 no-wrap'):
+            with ui.column().classes('w-1/3 min-w-[320px]'):
+                with ui.card().classes('w-full'):
+                    ui.label('Options Chain Controls').classes(
+                        'text-xl font-semibold'
+                    )
+                    chain_symbol_input = ui.input('Symbol').props(
+                        'clearable'
+                    ).classes('w-40')
+                    chain_contract_type = ui.select(
+                        options=['ALL', 'CALL', 'PUT'],
+                        value='ALL',
+                        label='Contract Type',
+                    ).classes('w-40')
+                    chain_dte_input = ui.input(
+                        label='DTE',
+                        value='365',
+                        on_change=on_chain_dte_change,
+                    ).props('type=number').classes('w-40')
+                    chain_dte_value_label = ui.label('DTE <= -').classes(
+                        'text-xs'
+                    )
+                    ui.button('Get Chain', on_click=get_chain_click)
+
+            with ui.column().classes('flex-1 min-w-0'):
+                with ui.card().classes('w-full'):
+                    ui.label('Options Chain Display').classes(
+                        'text-xl font-semibold'
+                    )
+                    chain_output = ui.textarea(label='Chain JSON')
+                    chain_output.props('readonly').classes('w-full')
+                    chain_output.style('height: 75vh;')
 
     with ui.tab_panel(analysis_tab):
         with ui.card().classes('w-full'):
