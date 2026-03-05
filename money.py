@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from nicegui import ui
 from schwab_api import SchwabAPI
 from positions import load_portfolio_positions
+import options
 
 try:
     from schwabdev.client import Client as _SchwabClient
@@ -24,6 +25,9 @@ except ImportError as exc:
 SchwabClient: Any = _SchwabClient
 
 load_dotenv()
+
+dark_mode = ui.dark_mode()
+dark_mode.enable()
 
 
 def getClient():
@@ -70,6 +74,14 @@ def get_api() -> SchwabAPI:
 
 def fetch_quote(symbol: str) -> dict[str, Any] | None:
     return get_api().get_quote(symbol.upper())
+
+
+def fetch_chain(symbol: str, contract_type: str) -> dict[str, Any]:
+    return options.getChain(
+        get_api(),
+        name=symbol.upper(),
+        put_or_call=contract_type,
+    )
 
 
 def fetch_portfolio_rows() -> list[dict[str, Any]]:
@@ -222,6 +234,21 @@ async def get_quote_click():
         quote_output.value = f'Quote error: {exc}'
 
 
+async def get_chain_click():
+    symbol = chain_symbol_input.value.strip()
+    if not symbol:
+        ui.notify('Enter a ticker symbol first', color='warning')
+        return
+
+    contract_type = chain_contract_type.value or 'ALL'
+    chain_output.value = 'Loading...'
+    try:
+        chain = await asyncio.to_thread(fetch_chain, symbol, contract_type)
+        chain_output.value = json.dumps(chain, indent=2)
+    except Exception as exc:
+        chain_output.value = f'Chain error: {exc}'
+
+
 async def load_portfolio_click():
     global original_portfolio_rows
     load_portfolio_button.disable()
@@ -280,6 +307,7 @@ async def exit_app_click():
 with ui.tabs().classes('w-full') as tabs:
     dashboard_tab = ui.tab('Dashboard')
     portfolio_tab = ui.tab('Portfolio')
+    options_tab = ui.tab('Options')
     analysis_tab = ui.tab('Analysis')
 
 with ui.tab_panels(tabs, value=portfolio_tab).classes('w-full'):
@@ -398,6 +426,22 @@ with ui.tab_panels(tabs, value=portfolio_tab).classes('w-full'):
                             'rows-per-page-options="[0]"'
                         )
                     )
+
+    with ui.tab_panel(options_tab):
+        with ui.card().classes('w-full'):
+            ui.label('Options Chain').classes('text-xl font-semibold')
+            with ui.row().classes('items-end gap-2'):
+                chain_symbol_input = ui.input('Symbol').props(
+                    'clearable'
+                ).classes('w-40')
+                chain_contract_type = ui.select(
+                    options=['ALL', 'CALL', 'PUT'],
+                    value='ALL',
+                    label='Contract Type',
+                ).classes('w-40')
+            ui.button('Get Chain', on_click=get_chain_click)
+            chain_output = ui.textarea(label='Chain JSON')
+            chain_output.props('readonly').classes('w-full')
 
     with ui.tab_panel(analysis_tab):
         with ui.card().classes('w-full'):
