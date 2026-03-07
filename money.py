@@ -67,6 +67,8 @@ raw_chain_data: dict[str, Any] | None = None
 pending_chain_render_task: asyncio.Task[Any] | None = None
 chain_dte_min: int | None = None
 chain_dte_max: int | None = None
+chain_step_contracts: list[dict[str, Any]] = []
+chain_step_index: int = 0
 
 
 def get_api() -> SchwabAPI:
@@ -163,6 +165,111 @@ def _filter_chain_by_dte(
     return filtered
 
 
+def _price_text(value: Any) -> str:
+    if isinstance(value, (int, float)):
+        return f'{float(value):.2f}'
+    if value is None:
+        return '-'
+    return str(value)
+
+
+def _extract_step_contracts(chain: dict[str, Any]) -> list[dict[str, Any]]:
+    contracts: list[dict[str, Any]] = []
+    for map_name in ('callExpDateMap', 'putExpDateMap'):
+        exp_map = chain.get(map_name, {}) or {}
+        for exp_key, strikes in exp_map.items():
+            exp_key_dte = _dte_from_exp_key(exp_key)
+            for _, contract_list in (strikes or {}).items():
+                for contract in contract_list or []:
+                    contract_dte = _coerce_int(
+                        contract.get('daysToExpiration')
+                    )
+                    dte = contract_dte if contract_dte is not None else exp_key_dte
+                    if dte is None:
+                        continue
+                    contracts.append(
+                        {
+                            'description': str(
+                                contract.get('description')
+                                or contract.get('symbol')
+                                or '-'
+                            ),
+                            'bid': contract.get('bid') or contract.get('bidPrice'),
+                            'ask': contract.get('ask') or contract.get('askPrice'),
+                            'last': contract.get('last') or contract.get('lastPrice'),
+                            'mark': contract.get('mark'),
+                            'dte': dte,
+                            'symbol': str(contract.get('symbol') or ''),
+                        }
+                    )
+
+    contracts.sort(
+        key=lambda row: (
+            int(row.get('dte') or 0),
+            str(row.get('symbol') or ''),
+        )
+    )
+    return contracts
+
+
+def _update_chain_step_display() -> None:
+    if not chain_step_contracts:
+        chain_step_position_label.text = '0 / 0'
+        chain_step_description_value.text = '-'
+        chain_step_bid_value.text = '-'
+        chain_step_ask_value.text = '-'
+        chain_step_last_value.text = '-'
+        chain_step_mark_value.text = '-'
+        chain_step_up_button.disable()
+        chain_step_down_button.disable()
+        return
+
+    contract = chain_step_contracts[chain_step_index]
+    chain_step_position_label.text = (
+        f'{chain_step_index + 1} / {len(chain_step_contracts)}'
+    )
+    chain_step_description_value.text = str(
+        contract.get('description') or '-'
+    )
+    chain_step_bid_value.text = _price_text(contract.get('bid'))
+    chain_step_ask_value.text = _price_text(contract.get('ask'))
+    chain_step_last_value.text = _price_text(contract.get('last'))
+    chain_step_mark_value.text = _price_text(contract.get('mark'))
+
+    if chain_step_index <= 0:
+        chain_step_up_button.disable()
+    else:
+        chain_step_up_button.enable()
+
+    if chain_step_index >= len(chain_step_contracts) - 1:
+        chain_step_down_button.disable()
+    else:
+        chain_step_down_button.enable()
+
+
+def _set_chain_step_contracts(chain: dict[str, Any]) -> None:
+    global chain_step_contracts, chain_step_index
+    chain_step_contracts = _extract_step_contracts(chain)
+    chain_step_index = 0
+    _update_chain_step_display()
+
+
+def on_chain_step_up() -> None:
+    global chain_step_index
+    if chain_step_index <= 0:
+        return
+    chain_step_index -= 1
+    _update_chain_step_display()
+
+
+def on_chain_step_down() -> None:
+    global chain_step_index
+    if chain_step_index >= len(chain_step_contracts) - 1:
+        return
+    chain_step_index += 1
+    _update_chain_step_display()
+
+
 async def _render_filtered_chain() -> None:
     if raw_chain_data is None:
         return
@@ -191,6 +298,7 @@ async def _render_filtered_chain() -> None:
         raw_chain_data,
         dte_limit,
     )
+    _set_chain_step_contracts(filtered)
     chain_output.value = await asyncio.to_thread(
         lambda: json.dumps(filtered, indent=2)
     )
@@ -383,6 +491,7 @@ async def get_chain_click():
             chain_dte_min = None
             chain_dte_max = None
             chain_dte_value_label.text = 'DTE <= -'
+            _set_chain_step_contracts({})
             chain_output.value = f'Chain error: unexpected response type {type(chain).__name__}'
             return
 
@@ -400,6 +509,7 @@ async def get_chain_click():
             chain_dte_max = None
             chain_dte_input.value = '365'
             chain_dte_value_label.text = 'DTE <= -'
+            _set_chain_step_contracts(chain)
             chain_output.value = json.dumps(chain, indent=2)
     except Exception as exc:
         raw_chain_data = None
@@ -412,6 +522,7 @@ async def get_chain_click():
             pending_chain_render_task.cancel()
         chain_dte_input.value = '365'
         chain_dte_value_label.text = 'DTE <= -'
+        _set_chain_step_contracts({})
         chain_output.value = f'Chain error: {exc}'
 
 
@@ -633,6 +744,48 @@ with ui.tab_panels(tabs, value=portfolio_tab).classes('w-full'):
                         'text-xs'
                     )
                     ui.button('Get Chain', on_click=get_chain_click)
+
+                with ui.card().classes('w-full'):
+                    ui.label('Chain Step').classes('text-lg font-semibold')
+                    with ui.row().classes('items-center gap-2'):
+                        chain_step_up_button = ui.button(
+                            'Up',
+                            on_click=on_chain_step_up,
+                        )
+                        chain_step_down_button = ui.button(
+                            'Down',
+                            on_click=on_chain_step_down,
+                        )
+                        chain_step_position_label = ui.label('0 / 0').classes(
+                            'text-sm'
+                        )
+
+                    with ui.row().classes('items-center gap-2'):
+                        ui.label('Description:')
+                        chain_step_description_value = ui.label('-').classes(
+                            'font-semibold'
+                        )
+                    with ui.row().classes('items-center gap-4'):
+                        ui.label('Bid:')
+                        chain_step_bid_value = ui.label('-').classes(
+                            'font-semibold'
+                        )
+                        ui.label('Ask:')
+                        chain_step_ask_value = ui.label('-').classes(
+                            'font-semibold'
+                        )
+                    with ui.row().classes('items-center gap-4'):
+                        ui.label('Last:')
+                        chain_step_last_value = ui.label('-').classes(
+                            'font-semibold'
+                        )
+                        ui.label('Mark:')
+                        chain_step_mark_value = ui.label('-').classes(
+                            'font-semibold'
+                        )
+
+                    chain_step_up_button.disable()
+                    chain_step_down_button.disable()
 
             with ui.column().classes('flex-1 min-w-0'):
                 with ui.card().classes('w-full'):
