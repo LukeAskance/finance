@@ -29,6 +29,22 @@ load_dotenv()
 dark_mode = ui.dark_mode()
 dark_mode.enable()
 
+ui.add_head_html('''
+<style>
+.portfolio-table-wrap .q-table__middle {
+    max-height: 75vh;
+    overflow: auto;
+}
+
+.portfolio-table-wrap thead tr th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--q-dark-page);
+}
+</style>
+''')
+
 
 def getClient():
     if SchwabClient is None:
@@ -813,7 +829,7 @@ with ui.tab_panels(tabs, value=portfolio_tab).classes('w-full'):
                         },
                     ]
                     with ui.element('div').classes(
-                        'w-full max-h-[75vh] overflow-auto'
+                        'w-full portfolio-table-wrap'
                     ):
                         portfolio_table = ui.table(
                             columns=portfolio_columns,
