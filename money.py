@@ -721,12 +721,6 @@ with ui.tab_panels(tabs, value=portfolio_tab).classes('w-full'):
                         'clearable'
                     ).classes('w-40')
                     ui.button('Get Quote', on_click=get_quote_click)
-                    load_portfolio_button = ui.button(
-                        'Load Portfolio',
-                        on_click=load_portfolio_click,
-                    )
-                    ui.button('aggregate', on_click=aggregate_click)
-                    ui.button('unaggregate', on_click=unaggregate_click)
 
                     with ui.row():
                         ui.label('Symbol:')
@@ -750,6 +744,15 @@ with ui.tab_panels(tabs, value=portfolio_tab).classes('w-full'):
 
                     quote_output = ui.textarea(label='Quote JSON')
                     quote_output.props('readonly').classes('w-full')
+
+                with ui.card().classes('w-full'):
+                    ui.label('Portfolio Actions').classes('text-xl font-semibold')
+                    load_portfolio_button = ui.button(
+                        'Load Portfolio',
+                        on_click=load_portfolio_click,
+                    )
+                    ui.button('aggregate', on_click=aggregate_click)
+                    ui.button('unaggregate', on_click=unaggregate_click)
 
             with ui.column().classes('flex-1 min-w-0'):
                 with ui.card().classes('w-full'):
