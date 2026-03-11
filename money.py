@@ -69,6 +69,7 @@ chain_dte_min: int | None = None
 chain_dte_max: int | None = None
 chain_step_contracts: list[dict[str, Any]] = []
 chain_step_index: int = 0
+filtered_chain_data: dict[str, Any] | None = None
 
 
 def get_api() -> SchwabAPI:
@@ -173,14 +174,72 @@ def _price_text(value: Any) -> str:
     return str(value)
 
 
+def _coerce_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        text = str(value).strip()
+        if not text:
+            return None
+        return float(text)
+    except ValueError:
+        return None
+
+
 def _extract_step_contracts(chain: dict[str, Any]) -> list[dict[str, Any]]:
     contracts: list[dict[str, Any]] = []
+    underlying = chain.get('underlying', {}) or {}
+    underlying_price: float | None = None
+    if isinstance(underlying, dict):
+        underlying_last = underlying.get('last')
+        if isinstance(underlying_last, (int, float)):
+            underlying_price = float(underlying_last)
+        else:
+            try:
+                if underlying_last is not None:
+                    underlying_price = float(str(underlying_last).strip())
+            except ValueError:
+                underlying_price = None
+
+    show_itm = bool(chain_step_itm_checkbox.value)
+    show_ntm = bool(chain_step_ntm_checkbox.value)
+    show_otm = bool(chain_step_otm_checkbox.value)
+
+    def _matches_moneyness(contract: dict[str, Any]) -> bool:
+        in_the_money = bool(contract.get('inTheMoney'))
+        strike_value = contract.get('strikePrice')
+        strike = None
+        if isinstance(strike_value, (int, float)):
+            strike = float(strike_value)
+        else:
+            try:
+                if strike_value is not None:
+                    strike = float(str(strike_value).strip())
+            except ValueError:
+                strike = None
+
+        is_ntm = False
+        if strike is not None and underlying_price is not None:
+            is_ntm = abs(strike - underlying_price) <= 1.5
+
+        if show_itm and in_the_money:
+            return True
+        if show_otm and not in_the_money:
+            return True
+        if show_ntm and is_ntm:
+            return True
+        return False
+
     for map_name in ('callExpDateMap', 'putExpDateMap'):
         exp_map = chain.get(map_name, {}) or {}
         for exp_key, strikes in exp_map.items():
             exp_key_dte = _dte_from_exp_key(exp_key)
             for _, contract_list in (strikes or {}).items():
                 for contract in contract_list or []:
+                    if not _matches_moneyness(contract):
+                        continue
                     contract_dte = _coerce_int(
                         contract.get('daysToExpiration')
                     )
@@ -197,9 +256,18 @@ def _extract_step_contracts(chain: dict[str, Any]) -> list[dict[str, Any]]:
                             'bid': contract.get('bid') or contract.get('bidPrice'),
                             'ask': contract.get('ask') or contract.get('askPrice'),
                             'last': contract.get('last') or contract.get('lastPrice'),
-                            'mark': contract.get('mark'),
+                            'mark': (
+                                contract.get('mark')
+                                or contract.get('markPrice')
+                                or contract.get('last')
+                                or contract.get('lastPrice')
+                            ),
                             'dte': dte,
                             'symbol': str(contract.get('symbol') or ''),
+                            'inTheMoney': bool(
+                                contract.get('inTheMoney')
+                            ),
+                            'strikePrice': contract.get('strikePrice'),
                         }
                     )
 
@@ -220,6 +288,9 @@ def _update_chain_step_display() -> None:
         chain_step_ask_value.text = '-'
         chain_step_last_value.text = '-'
         chain_step_mark_value.text = '-'
+        chain_step_dte_value.text = '-'
+        chain_step_premium_value.text = '-'
+        chain_step_annualized_value.text = '-'
         chain_step_up_button.disable()
         chain_step_down_button.disable()
         return
@@ -228,13 +299,35 @@ def _update_chain_step_display() -> None:
     chain_step_position_label.text = (
         f'{chain_step_index + 1} / {len(chain_step_contracts)}'
     )
-    chain_step_description_value.text = str(
-        contract.get('description') or '-'
-    )
+    symbol = str(contract.get('symbol') or '-')
+    dte = _coerce_int(contract.get('dte'))
+    dte_text = str(dte) if dte is not None else '-'
+    chain_step_description_value.text = symbol
+    chain_step_dte_value.text = dte_text
     chain_step_bid_value.text = _price_text(contract.get('bid'))
     chain_step_ask_value.text = _price_text(contract.get('ask'))
     chain_step_last_value.text = _price_text(contract.get('last'))
     chain_step_mark_value.text = _price_text(contract.get('mark'))
+
+    mark = _coerce_float(contract.get('mark'))
+    strike = _coerce_float(contract.get('strikePrice'))
+    premium_percent: float | None = None
+    annualized_percent: float | None = None
+    if mark is not None and strike and strike > 0:
+        premium_percent = (mark / strike) * 100.0
+    if premium_percent is not None and dte and dte > 0:
+        annualized_percent = premium_percent * (364.0 / dte)
+
+    chain_step_premium_value.text = (
+        f'{premium_percent:.2f}%'
+        if premium_percent is not None
+        else '-'
+    )
+    chain_step_annualized_value.text = (
+        f'{annualized_percent:.2f}%'
+        if annualized_percent is not None
+        else '-'
+    )
 
     if chain_step_index <= 0:
         chain_step_up_button.disable()
@@ -248,10 +341,18 @@ def _update_chain_step_display() -> None:
 
 
 def _set_chain_step_contracts(chain: dict[str, Any]) -> None:
-    global chain_step_contracts, chain_step_index
+    global chain_step_contracts, chain_step_index, filtered_chain_data
+    filtered_chain_data = chain
     chain_step_contracts = _extract_step_contracts(chain)
     chain_step_index = 0
     _update_chain_step_display()
+
+
+def on_chain_step_filter_change(_: Any = None) -> None:
+    if filtered_chain_data is None:
+        _set_chain_step_contracts({})
+        return
+    _set_chain_step_contracts(filtered_chain_data)
 
 
 def on_chain_step_up() -> None:
@@ -476,7 +577,7 @@ async def get_quote_click():
 
 
 async def get_chain_click():
-    global raw_chain_data, pending_chain_render_task, chain_dte_min, chain_dte_max
+    global raw_chain_data, pending_chain_render_task, chain_dte_min, chain_dte_max, filtered_chain_data
     symbol = chain_symbol_input.value.strip()
     if not symbol:
         ui.notify('Enter a ticker symbol first', color='warning')
@@ -488,6 +589,7 @@ async def get_chain_click():
         chain = await asyncio.to_thread(fetch_chain, symbol, contract_type)
         if not isinstance(chain, dict):
             raw_chain_data = None
+            filtered_chain_data = None
             chain_dte_min = None
             chain_dte_max = None
             chain_dte_value_label.text = 'DTE <= -'
@@ -513,6 +615,7 @@ async def get_chain_click():
             chain_output.value = json.dumps(chain, indent=2)
     except Exception as exc:
         raw_chain_data = None
+        filtered_chain_data = None
         chain_dte_min = None
         chain_dte_max = None
         if (
@@ -747,6 +850,22 @@ with ui.tab_panels(tabs, value=portfolio_tab).classes('w-full'):
 
                 with ui.card().classes('w-full'):
                     ui.label('Chain Step').classes('text-lg font-semibold')
+                    with ui.row().classes('items-center gap-4'):
+                        chain_step_itm_checkbox = ui.checkbox(
+                            'ITM',
+                            value=True,
+                            on_change=on_chain_step_filter_change,
+                        )
+                        chain_step_ntm_checkbox = ui.checkbox(
+                            'NTM',
+                            value=True,
+                            on_change=on_chain_step_filter_change,
+                        )
+                        chain_step_otm_checkbox = ui.checkbox(
+                            'OTM',
+                            value=True,
+                            on_change=on_chain_step_filter_change,
+                        )
                     with ui.row().classes('items-center gap-2'):
                         chain_step_up_button = ui.button(
                             'Up',
@@ -774,13 +893,25 @@ with ui.tab_panels(tabs, value=portfolio_tab).classes('w-full'):
                         chain_step_ask_value = ui.label('-').classes(
                             'font-semibold'
                         )
-                    with ui.row().classes('items-center gap-4'):
                         ui.label('Last:')
                         chain_step_last_value = ui.label('-').classes(
                             'font-semibold'
                         )
                         ui.label('Mark:')
                         chain_step_mark_value = ui.label('-').classes(
+                            'font-semibold'
+                        )
+                    with ui.row().classes('items-center gap-4'):
+                        ui.label('DTE:')
+                        chain_step_dte_value = ui.label('-').classes(
+                            'font-semibold'
+                        )
+                        ui.label('Premium %:')
+                        chain_step_premium_value = ui.label('-').classes(
+                            'font-semibold'
+                        )
+                        ui.label('Annualized %:')
+                        chain_step_annualized_value = ui.label('-').classes(
                             'font-semibold'
                         )
 
