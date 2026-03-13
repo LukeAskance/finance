@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from nicegui import ui
 from schwab_api import SchwabAPI
 from positions import load_portfolio_positions
+from analysis_module import PortfolioAnalysisEngine
 import options
 
 try:
@@ -86,6 +87,11 @@ chain_dte_max: int | None = None
 chain_step_contracts: list[dict[str, Any]] = []
 chain_step_index: int = 0
 filtered_chain_data: dict[str, Any] | None = None
+analysis_engine = PortfolioAnalysisEngine()
+analysis_default_models = {
+    'claude': 'claude-sonnet-4-20250514',
+    'perplexity': 'sonar',
+}
 
 
 def get_api() -> SchwabAPI:
@@ -716,6 +722,88 @@ async def exit_app_click():
     loop.call_later(0.2, lambda: os._exit(0))
 
 
+async def refresh_analysis_snapshot_click() -> None:
+    analysis_refresh_button.disable()
+    analysis_refresh_button.text = 'Refreshing...'
+    try:
+        count = await asyncio.to_thread(
+            analysis_engine.refresh_snapshot,
+            get_api(),
+            True,
+            True,
+        )
+        as_of = analysis_engine.as_of.strftime('%Y-%m-%d %H:%M:%S') if analysis_engine.as_of else '-'
+        analysis_status_value.text = (
+            f'{count} aggregated positions loaded @ {as_of}'
+        )
+        analysis_rows_table.rows = []
+        analysis_rows_table.update()
+        analysis_answer.value = 'Snapshot refreshed. Ask a question below.'
+    except Exception as exc:
+        analysis_answer.value = f'Analysis refresh error: {exc}'
+    finally:
+        analysis_refresh_button.text = 'Refresh Snapshot'
+        analysis_refresh_button.enable()
+
+
+async def ask_analysis_click() -> None:
+    question = analysis_question_input.value.strip()
+    if not question:
+        ui.notify('Enter a question first', color='warning')
+        return
+
+    analysis_ask_button.disable()
+    analysis_ask_button.text = 'Thinking...'
+    try:
+        answer_text, rows = await asyncio.to_thread(
+            analysis_engine.answer_question,
+            question,
+        )
+        analysis_answer.value = answer_text
+        analysis_rows_table.rows = rows
+        analysis_rows_table.update()
+    except Exception as exc:
+        analysis_answer.value = f'Analysis error: {exc}'
+    finally:
+        analysis_ask_button.text = 'Ask'
+        analysis_ask_button.enable()
+
+
+async def ask_analysis_llm_click() -> None:
+    question = analysis_question_input.value.strip()
+    if not question:
+        ui.notify('Enter a question first', color='warning')
+        return
+
+    analysis_llm_button.disable()
+    analysis_llm_button.text = 'Querying LLM...'
+    try:
+        answer_text, rows = await asyncio.to_thread(
+            analysis_engine.ask_llm,
+            question,
+            analysis_provider_select.value or 'claude',
+            analysis_model_input.value or '',
+            bool(analysis_grounded_toggle.value),
+        )
+        analysis_answer.value = answer_text
+        analysis_rows_table.rows = rows
+        analysis_rows_table.update()
+    except Exception as exc:
+        analysis_answer.value = f'LLM analysis error: {exc}'
+    finally:
+        analysis_llm_button.text = 'Ask LLM'
+        analysis_llm_button.enable()
+
+
+def on_analysis_provider_change(_: Any = None) -> None:
+    provider = (analysis_provider_select.value or 'claude').strip().lower()
+    default_model = analysis_default_models.get(
+        provider,
+        analysis_default_models['claude'],
+    )
+    analysis_model_input.value = default_model
+
+
 with ui.tabs().classes('w-full') as tabs:
     dashboard_tab = ui.tab('Dashboard')
     portfolio_tab = ui.tab('Portfolio')
@@ -948,7 +1036,80 @@ with ui.tab_panels(tabs, value=portfolio_tab).classes('w-full'):
 
     with ui.tab_panel(analysis_tab):
         with ui.card().classes('w-full'):
-            ui.label('Analysis').classes('text-xl font-semibold')
+            ui.label('Portfolio Analysis').classes('text-xl font-semibold')
+            with ui.row().classes('items-center gap-2'):
+                analysis_refresh_button = ui.button(
+                    'Refresh Snapshot',
+                    on_click=refresh_analysis_snapshot_click,
+                )
+                analysis_status_value = ui.label('No snapshot loaded').classes(
+                    'text-sm'
+                )
+
+            analysis_question_input = ui.input(
+                'Ask about portfolio data',
+                placeholder='e.g., Which positions have more than 100 shares?',
+            ).classes('w-full')
+            with ui.row().classes('items-center gap-2'):
+                analysis_provider_select = ui.select(
+                    options=['claude', 'perplexity'],
+                    value='claude',
+                    label='Provider',
+                    on_change=on_analysis_provider_change,
+                ).classes('w-40')
+                analysis_model_input = ui.input(
+                    'Model',
+                    value=analysis_default_models['claude'],
+                ).classes('w-64')
+                analysis_grounded_toggle = ui.checkbox(
+                    'Grounded only',
+                    value=True,
+                )
+
+            with ui.row().classes('items-center gap-2'):
+                analysis_ask_button = ui.button(
+                    'Ask',
+                    on_click=ask_analysis_click,
+                )
+                analysis_llm_button = ui.button(
+                    'Ask LLM',
+                    on_click=ask_analysis_llm_click,
+                )
+
+            analysis_answer = ui.textarea(label='Answer')
+            analysis_answer.props('readonly').classes('w-full')
+
+            analysis_columns = [
+                {'name': 'symbol', 'label': 'Symbol', 'field': 'symbol'},
+                {'name': 'account', 'label': 'Account', 'field': 'account'},
+                {'name': 'type', 'label': 'Type', 'field': 'type'},
+                {
+                    'name': 'quantity',
+                    'label': 'Qty',
+                    'field': 'quantity',
+                    'align': 'right',
+                },
+                {
+                    'name': 'market_value',
+                    'label': 'Mkt Value',
+                    'field': 'market_value',
+                    'align': 'right',
+                },
+                {'name': 'sector', 'label': 'Sector', 'field': 'sector'},
+                {
+                    'name': 'industry',
+                    'label': 'Industry',
+                    'field': 'industry',
+                },
+            ]
+            with ui.element('div').classes('w-full max-h-[45vh] overflow-auto'):
+                analysis_rows_table = ui.table(
+                    columns=analysis_columns,
+                    rows=[],
+                ).classes('w-max min-w-full')
+            analysis_rows_table.props(
+                'pagination={"rowsPerPage":0} rows-per-page-options="[0]"'
+            )
 
 
 ui.run(port=8000, reload=False, )
