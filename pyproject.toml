@@ -5,9 +5,12 @@ description = "Going to build a portfolio GUI based upon SchwabAPI"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "dotenv>=0.9.9",
+    "matplotlib>=3.8.0",
     "nicegui>=3.8.0",
+    "numpy>=1.26.0",
+    "pandas>=2.2.0",
     "pyfredapi>=0.10.2",
-    "requests>=2.32.5",
-    "yfinance>=1.2.0",
+    "python-dotenv>=1.0.1",
+    "requests>=2.32.0",
+    "yfinance>=0.2.0",
 ]
