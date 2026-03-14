@@ -1,6 +1,7 @@
 #! /Users/george/code/money/.venv/bin/python3
 
 import asyncio
+from datetime import date, datetime, timedelta
 import json
 import os
 import sys
@@ -16,6 +17,13 @@ from positions import load_portfolio_positions
 from analysis_module import PortfolioAnalysisEngine
 import options
 import utilities
+
+try:
+    from dividend_prediction import DividendForecaster
+    _dividend_prediction_import_error = None
+except ImportError as exc:
+    DividendForecaster = None
+    _dividend_prediction_import_error = exc
 
 try:
     from schwabdev.client import Client as _SchwabClient
@@ -113,6 +121,8 @@ analysis_default_models = {
     'claude': 'claude-sonnet-4-20250514',
     'perplexity': 'sonar',
 }
+
+EQUITY_INCOME_TYPES = {'EQUITY', 'MUTUAL_FUND', 'COLLECTIVE_INVESTMENT'}
 
 
 def get_api() -> SchwabAPI:
@@ -854,6 +864,214 @@ async def on_historicals_mode_change(_: Any = None) -> None:
     await plot_historicals_click(silent_if_incomplete=True)
 
 
+def _parse_iso_date(value: Any) -> date | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text or text == 'UnknownDay':
+        return None
+    try:
+        return datetime.strptime(text[:10], '%Y-%m-%d').date()
+    except ValueError:
+        return None
+
+
+def _build_symbol_dividend_payload(
+    symbol: str,
+    shares: float,
+    forecast_years: int,
+) -> dict[str, Any]:
+    if DividendForecaster is None:
+        raise RuntimeError(
+            f'dividend_prediction unavailable: {_dividend_prediction_import_error}'
+        )
+
+    forecaster = DividendForecaster.from_yfinance(symbol, shares=shares)
+    result = forecaster.project(years=forecast_years)
+
+    history_series = forecaster._raw.sort_index()
+    historical_points = [
+        (pd_ts.to_pydatetime(), float(amount))
+        for pd_ts, amount in history_series.items()
+    ]
+
+    historical_rows = [
+        {
+            'date': pd_ts.strftime('%Y-%m-%d'),
+            'div_per_share': round(float(amount), 4),
+        }
+        for pd_ts, amount in history_series.tail(80).items()
+    ]
+
+    annual_rows = [
+        {
+            'year': int(pd_ts.year),
+            'annual_div_per_share': round(float(total), 4),
+            'annual_income': round(float(total) * shares, 2),
+        }
+        for pd_ts, total in forecaster.annual.tail(12).items()
+    ]
+
+    base = result.scenarios.get('base')
+    bear = result.scenarios.get('bear')
+    bull = result.scenarios.get('bull')
+    projection_rows: list[dict[str, Any]] = []
+    if base and bear and bull:
+        for idx, year in enumerate(base.years):
+            projection_rows.append(
+                {
+                    'year': year,
+                    'bear_income': round(bear.annual_dividends[idx] * shares, 2),
+                    'base_income': round(base.annual_dividends[idx] * shares, 2),
+                    'bull_income': round(bull.annual_dividends[idx] * shares, 2),
+                }
+            )
+
+    return {
+        'summary': result.summary(),
+        'historical_points': historical_points,
+        'historical_rows': historical_rows,
+        'annual_rows': annual_rows,
+        'projection_rows': projection_rows,
+    }
+
+
+def _render_income_symbol_plot(points: list[tuple[datetime, float]]) -> None:
+    import matplotlib.pyplot as plt
+
+    income_symbol_plot_host.clear()
+    with income_symbol_plot_host:
+        if not points:
+            ui.label('No dividend history available.').classes('text-sm text-orange')
+            return
+
+        with ui.pyplot(figsize=(16, 5), close=False).classes('w-full'):
+            xs = [item[0] for item in points]
+            ys = [item[1] for item in points]
+            plt.plot(xs, ys, marker='o', linewidth=1.5)
+            plt.grid(True, linestyle='--', alpha=0.6)
+            plt.xlabel('Payment Date')
+            plt.ylabel('Dividend / Share ($)')
+            plt.title('Historical Dividends')
+            plt.tight_layout()
+
+
+async def income_symbol_analyze_click() -> None:
+    symbol = (income_symbol_input.value or '').strip().upper()
+    if not symbol:
+        ui.notify('Enter a ticker symbol', color='warning')
+        return
+
+    shares_value = income_symbol_shares_input.value
+    try:
+        shares = float(shares_value) if shares_value not in (None, '') else 1.0
+    except ValueError:
+        ui.notify('Shares must be a valid number', color='warning')
+        return
+    if shares <= 0:
+        ui.notify('Shares must be greater than zero', color='warning')
+        return
+
+    forecast_years = utilities.coerce_positive_int(income_symbol_years_input.value)
+    if forecast_years is None:
+        ui.notify('Forecast years must be a positive integer', color='warning')
+        return
+
+    income_symbol_button.disable()
+    income_symbol_button.text = 'Analyzing...'
+    try:
+        payload = await asyncio.to_thread(
+            _build_symbol_dividend_payload,
+            symbol,
+            shares,
+            forecast_years,
+        )
+        income_symbol_summary.value = payload['summary']
+        income_symbol_history_table.rows = payload['historical_rows']
+        income_symbol_history_table.update()
+        income_symbol_annual_table.rows = payload['annual_rows']
+        income_symbol_annual_table.update()
+        income_symbol_projection_table.rows = payload['projection_rows']
+        income_symbol_projection_table.update()
+        _render_income_symbol_plot(payload['historical_points'])
+    except Exception as exc:
+        ui.notify(f'Income analysis error: {exc}', color='negative')
+    finally:
+        income_symbol_button.text = 'Analyze'
+        income_symbol_button.enable()
+
+
+def _portfolio_income_projection() -> tuple[dict[str, float], list[dict[str, Any]]]:
+    positions = load_portfolio_positions(
+        get_api(),
+        include_options=False,
+        include_cash=False,
+    )
+
+    today = date.today()
+    horizon = today + timedelta(days=365)
+    events: list[dict[str, Any]] = []
+
+    for pos in positions:
+        if pos.position_type not in EQUITY_INCOME_TYPES:
+            continue
+        if pos.quantity <= 0 or pos.div_pay_amount <= 0 or pos.div_freq <= 0:
+            continue
+
+        start = _parse_iso_date(pos.next_div_pay_date) or _parse_iso_date(pos.div_pay_date)
+        if start is None:
+            continue
+
+        interval_days = max(1, int(round(365 / pos.div_freq)))
+        pay_date = start
+        amount = float(pos.quantity) * float(pos.div_pay_amount)
+
+        while pay_date <= horizon:
+            days_out = (pay_date - today).days
+            if days_out >= 0:
+                events.append(
+                    {
+                        'date': pay_date.isoformat(),
+                        'days_out': days_out,
+                        'symbol': pos.symbol,
+                        'account': pos.account_name,
+                        'amount': round(amount, 2),
+                    }
+                )
+            pay_date = pay_date + timedelta(days=interval_days)
+
+    events.sort(key=lambda row: (row['date'], row['symbol'], row['account']))
+    month_income = sum(row['amount'] for row in events if row['days_out'] <= 30)
+    quarter_income = sum(row['amount'] for row in events if row['days_out'] <= 90)
+    year_income = sum(row['amount'] for row in events if row['days_out'] <= 365)
+
+    return (
+        {
+            'month': round(month_income, 2),
+            'quarter': round(quarter_income, 2),
+            'year': round(year_income, 2),
+        },
+        events,
+    )
+
+
+async def refresh_portfolio_income_click() -> None:
+    income_portfolio_button.disable()
+    income_portfolio_button.text = 'Refreshing...'
+    try:
+        totals, events = await asyncio.to_thread(_portfolio_income_projection)
+        income_month_value.text = f"${totals['month']:,.2f}"
+        income_quarter_value.text = f"${totals['quarter']:,.2f}"
+        income_year_value.text = f"${totals['year']:,.2f}"
+        income_events_table.rows = events[:500]
+        income_events_table.update()
+    except Exception as exc:
+        ui.notify(f'Portfolio income refresh failed: {exc}', color='negative')
+    finally:
+        income_portfolio_button.text = 'Refresh Portfolio Income'
+        income_portfolio_button.enable()
+
+
 def on_analysis_provider_change(_: Any = None) -> None:
     provider = (analysis_provider_select.value or 'claude').strip().lower()
     default_model = analysis_default_models.get(
@@ -868,6 +1086,7 @@ with ui.tabs().classes('w-full') as tabs:
     portfolio_tab = ui.tab('Portfolio')
     options_tab = ui.tab('Options')
     historicals_tab = ui.tab('Historicals')
+    income_tab = ui.tab('Income')
     analysis_tab = ui.tab('Analysis')
 
 with ui.tab_panels(tabs, value=portfolio_tab).classes('w-full'):
@@ -1122,6 +1341,141 @@ with ui.tab_panels(tabs, value=portfolio_tab).classes('w-full'):
             with ui.card().classes('w-full'):
                 historicals_plot_host = ui.column().classes('w-full')
                 ui.label('Click Plot to render chart').classes('text-sm text-gray')
+
+    with ui.tab_panel(income_tab):
+        with ui.column().classes('w-full gap-4'):
+            with ui.card().classes('w-full'):
+                ui.label('Stock Dividend History & Forecast').classes(
+                    'text-xl font-semibold'
+                )
+                with ui.row().classes('items-center gap-3 w-full'):
+                    income_symbol_input = ui.input(
+                        'Ticker',
+                        placeholder='AAPL',
+                    ).classes('w-32')
+                    income_symbol_shares_input = ui.input(
+                        'Shares',
+                        value='100',
+                    ).props('type=number min=0.0001 step=0.0001').classes('w-32')
+                    income_symbol_years_input = ui.input(
+                        'Forecast years',
+                        value='5',
+                    ).props('type=number min=1').classes('w-32')
+                    income_symbol_button = ui.button(
+                        'Analyze',
+                        on_click=income_symbol_analyze_click,
+                    )
+
+                income_symbol_summary = ui.textarea(label='Summary').classes('w-full')
+                income_symbol_summary.props('readonly')
+
+                with ui.card().classes('w-full'):
+                    income_symbol_plot_host = ui.column().classes('w-full')
+                    ui.label('Run Analyze to render dividend history').classes(
+                        'text-sm text-gray'
+                    )
+
+                with ui.row().classes('w-full gap-4 items-start no-wrap'):
+                    with ui.column().classes('w-1/2 min-w-0'):
+                        income_symbol_history_table = ui.table(
+                            columns=[
+                                {'name': 'date', 'label': 'Date', 'field': 'date'},
+                                {
+                                    'name': 'div_per_share',
+                                    'label': 'Div/Share',
+                                    'field': 'div_per_share',
+                                    'align': 'right',
+                                },
+                            ],
+                            rows=[],
+                        ).classes('w-full')
+                        income_symbol_history_table.props('pagination={"rowsPerPage":10}')
+
+                    with ui.column().classes('w-1/2 min-w-0'):
+                        income_symbol_annual_table = ui.table(
+                            columns=[
+                                {'name': 'year', 'label': 'Year', 'field': 'year'},
+                                {
+                                    'name': 'annual_div_per_share',
+                                    'label': 'Annual Div/Share',
+                                    'field': 'annual_div_per_share',
+                                    'align': 'right',
+                                },
+                                {
+                                    'name': 'annual_income',
+                                    'label': 'Annual Income',
+                                    'field': 'annual_income',
+                                    'align': 'right',
+                                },
+                            ],
+                            rows=[],
+                        ).classes('w-full')
+                        income_symbol_annual_table.props('pagination={"rowsPerPage":10}')
+
+                income_symbol_projection_table = ui.table(
+                    columns=[
+                        {'name': 'year', 'label': 'Year', 'field': 'year'},
+                        {
+                            'name': 'bear_income',
+                            'label': 'Bear Income',
+                            'field': 'bear_income',
+                            'align': 'right',
+                        },
+                        {
+                            'name': 'base_income',
+                            'label': 'Base Income',
+                            'field': 'base_income',
+                            'align': 'right',
+                        },
+                        {
+                            'name': 'bull_income',
+                            'label': 'Bull Income',
+                            'field': 'bull_income',
+                            'align': 'right',
+                        },
+                    ],
+                    rows=[],
+                ).classes('w-full')
+                income_symbol_projection_table.props('pagination={"rowsPerPage":10}')
+
+            with ui.card().classes('w-full'):
+                ui.label('Portfolio Income Projection').classes('text-xl font-semibold')
+                income_portfolio_button = ui.button(
+                    'Refresh Portfolio Income',
+                    on_click=refresh_portfolio_income_click,
+                )
+                with ui.row().classes('items-center gap-8'):
+                    with ui.column().classes('gap-1'):
+                        ui.label('Next 30 days').classes('text-sm')
+                        income_month_value = ui.label('$0.00').classes('text-lg font-semibold')
+                    with ui.column().classes('gap-1'):
+                        ui.label('Next 90 days').classes('text-sm')
+                        income_quarter_value = ui.label('$0.00').classes('text-lg font-semibold')
+                    with ui.column().classes('gap-1'):
+                        ui.label('Next 12 months').classes('text-sm')
+                        income_year_value = ui.label('$0.00').classes('text-lg font-semibold')
+
+                income_events_table = ui.table(
+                    columns=[
+                        {'name': 'date', 'label': 'Pay Date', 'field': 'date'},
+                        {
+                            'name': 'days_out',
+                            'label': 'Days Out',
+                            'field': 'days_out',
+                            'align': 'right',
+                        },
+                        {'name': 'symbol', 'label': 'Symbol', 'field': 'symbol'},
+                        {'name': 'account', 'label': 'Account', 'field': 'account'},
+                        {
+                            'name': 'amount',
+                            'label': 'Amount',
+                            'field': 'amount',
+                            'align': 'right',
+                        },
+                    ],
+                    rows=[],
+                ).classes('w-full')
+                income_events_table.props('pagination={"rowsPerPage":12}')
 
     with ui.tab_panel(analysis_tab):
         with ui.card().classes('w-full'):
