@@ -1,10 +1,8 @@
 #! /Users/george/code/money/.venv/bin/python3
 
 import asyncio
-from datetime import datetime
 import json
 import os
-import re
 import sys
 import time
 import subprocess
@@ -17,7 +15,7 @@ from schwab_api import SchwabAPI
 from positions import load_portfolio_positions
 from analysis_module import PortfolioAnalysisEngine
 import options
-import fundamentals
+import utilities
 
 try:
     from schwabdev.client import Client as _SchwabClient
@@ -79,41 +77,10 @@ def run_task(script: str):
     ui.notify(f'{script} finished')
 
 
-def _collect_historical_series(
-    symbols: list[str],
-    days: int,
-) -> dict[str, list[tuple[datetime, float]]]:
-    api_client = get_api()
-    series: dict[str, list[tuple[datetime, float]]] = {}
-    for symbol in symbols:
-        raw_points = fundamentals.get_historicals(
-            api=api_client,
-            name=symbol,
-            days=days,
-            gabby=False,
-        )
-        parsed_points: list[tuple[datetime, float]] = []
-        for date_text, close_value in raw_points or []:
-            try:
-                parsed_points.append(
-                    (
-                        datetime.strptime(str(date_text), '%Y-%m-%d'),
-                        float(close_value),
-                    )
-                )
-            except (TypeError, ValueError):
-                continue
-        if parsed_points:
-            series[symbol] = parsed_points
-    return series
-
-
 def _render_historicals_plot(
-    symbol_series: dict[str, list[tuple[datetime, float]]],
+    symbol_series: dict[str, list[tuple[Any, float]]],
     normalize: bool,
 ) -> None:
-    import matplotlib.pyplot as plt
-
     historicals_plot_host.clear()
     with historicals_plot_host:
         if not symbol_series:
@@ -123,28 +90,11 @@ def _render_historicals_plot(
             return
 
         with ui.pyplot(figsize=(16, 7), close=False).classes('w-full'):
-            for symbol, points in symbol_series.items():
-                points_sorted = sorted(points, key=lambda item: item[0])
-                x_values = [point[0] for point in points_sorted]
-                y_values = [point[1] for point in points_sorted]
-                if not y_values:
-                    continue
-
-                if normalize and y_values[0] != 0:
-                    base_value = y_values[0]
-                    y_values = [
-                        ((value / base_value) - 1.0) * 100.0
-                        for value in y_values
-                    ]
-
-                plt.plot(x_values, y_values, linewidth=2, label=symbol)
-
-            plt.grid(True, alpha=0.3)
-            plt.legend()
-            plt.xlabel('Date')
-            plt.ylabel('Change %' if normalize else 'Price ($)')
-            plt.title('Historical Stock Prices')
-            plt.tight_layout()
+            utilities.draw_historical_series(
+                symbol_series,
+                normalize=normalize,
+                title='Historical Stock Prices',
+            )
 
 
 
@@ -868,18 +818,14 @@ async def ask_analysis_llm_click() -> None:
 
 async def plot_historicals_click(silent_if_incomplete: bool = False) -> None:
     raw_symbols = (historicals_symbols_input.value or '').strip()
-    symbols = [
-        token.strip().upper()
-        for token in re.split(r'[\s,]+', raw_symbols)
-        if token.strip()
-    ]
+    symbols = utilities.parse_symbols(raw_symbols)
     if not symbols:
         if not silent_if_incomplete:
             ui.notify('Enter one or more ticker symbols', color='warning')
         return
 
-    days = _coerce_int(historicals_days_input.value)
-    if days is None or days <= 0:
+    days = utilities.coerce_positive_int(historicals_days_input.value)
+    if days is None:
         if not silent_if_incomplete:
             ui.notify('Enter a valid positive number of days', color='warning')
         return
@@ -891,7 +837,8 @@ async def plot_historicals_click(silent_if_incomplete: bool = False) -> None:
     historicals_plot_button.text = 'Plotting...'
     try:
         symbol_series = await asyncio.to_thread(
-            _collect_historical_series,
+            utilities.collect_historical_series,
+            get_api(),
             symbols,
             days,
         )
