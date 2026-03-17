@@ -5,18 +5,16 @@
 
 """
 
-import os
-import glob
-
-from collections import namedtuple
-import json
 import csv
-
-import c
-import options
-import fundamentals
+import glob
+import json
+import os
+from collections import namedtuple
 from typing import Optional, Tuple
 
+import c
+import fundamentals
+import options
 
 # * +++ Helper Functions +++
 
@@ -365,8 +363,8 @@ def fidelityTransactionAppraisals(api, ):
     Analyze Fidelity transactions and calculate performance metrics.
     Uses batched API calls for ~20x performance improvement (Issue #11).
     """
-    import options
     import fundamentals
+    import options
 
     # First pass: collect all transactions and identify symbols needing quotes
     all_transactions = []

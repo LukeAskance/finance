@@ -3,9 +3,9 @@
 # * (c) 1066-2050 George... Flammer All Rights Reserved
 """ dividends.py module is designed to ease finding optimal option options """
 
-from datetime import datetime
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Optional
 
 import c

@@ -3,17 +3,14 @@
 # * (c) 1066-2050 George... Flammer All Rights Reserved
 """ fundamentals.py module extracts and pretty prints equity fundamentals """
 
+import ast
+import json
 import os
 import sys
-import ast
 import threading
-
-import json
-from datetime import date
 from collections import namedtuple
-from typing import Generator, NamedTuple, Tuple, Optional, Dict
-
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
+from typing import Dict, Generator, NamedTuple, Optional, Tuple
 
 import yfinance as yf
 

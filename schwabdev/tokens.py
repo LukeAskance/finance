@@ -3,17 +3,18 @@ This file contains a class to manage tokens
 Coded by Tyler Bowers
 Github: https://github.com/tylerebowers/Schwab-API-Python
 """
+import base64
+import datetime
+import http.server
+import json
+import logging
 import os
 import ssl
-import json
-import time
-import base64
-import logging
-import requests
-import datetime
 import threading
+import time
 import webbrowser
-import http.server
+
+import requests
 
 
 class Tokens:
@@ -206,10 +207,9 @@ class Tokens:
 
     def _generate_certificate(self, common_name="common_name", key_filepath="localhost.key", cert_filepath="localhost.crt"):
         from cryptography import x509
-        from cryptography.x509.oid import NameOID
-        from cryptography.hazmat.primitives import hashes
-        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives import hashes, serialization
         from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
 
         # make folders for cert files
         os.makedirs(os.path.dirname(key_filepath), exist_ok=True)

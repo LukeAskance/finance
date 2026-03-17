@@ -7,17 +7,15 @@
 """
 
 import datetime
-from pathlib import Path
+import json
 from collections import namedtuple
 from dataclasses import dataclass
-from typing import List, Dict, Optional, Any
-
-import json
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 # ? import getClientAccounts
 import c
 import fundamentals
-
 
 # * vscode extension "Better Comments"... comments
 # * Important

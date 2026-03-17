@@ -4,10 +4,12 @@ Coded by Tyler Bowers
 Github: https://github.com/tylerebowers/Schwab-API-Python
 """
 
-import logging
 import datetime
-import requests
+import logging
 import urllib.parse
+
+import requests
+
 from .stream import Stream
 from .tokens import Tokens
 

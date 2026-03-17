@@ -1,22 +1,23 @@
 #! /Users/george/code/money/.venv/bin/python3
 
 import asyncio
-from datetime import date, datetime, timedelta
 import json
 import os
+import subprocess
 import sys
 import time
-import subprocess
 from contextlib import suppress
+from datetime import date, datetime, timedelta
 from typing import Any
-from dotenv import load_dotenv
 
+from dotenv import load_dotenv
 from nicegui import ui
-from schwab_api import SchwabAPI
-from positions import load_portfolio_positions
-from analysis_module import PortfolioAnalysisEngine
+
 import options
 import utilities
+from analysis_module import PortfolioAnalysisEngine
+from positions import load_portfolio_positions
+from schwab_api import SchwabAPI
 
 try:
     from dividend_prediction import DividendForecaster
@@ -92,7 +93,8 @@ def _render_historicals_plot(
     historicals_plot_host.clear()
     with historicals_plot_host:
         if not symbol_series:
-            ui.label('No historical data found for the selected symbols.').classes(
+            ui.label('No historical data found for the selected '
+                     'symbols.').classes(
                 'text-sm text-orange'
             )
             return
@@ -231,9 +233,7 @@ def _filter_chain_by_dte(
 def _price_text(value: Any) -> str:
     if isinstance(value, (int, float)):
         return f'{float(value):.2f}'
-    if value is None:
-        return '-'
-    return str(value)
+    return '-' if value is None else str(value)
 
 
 def _coerce_float(value: Any) -> float | None:
@@ -243,9 +243,7 @@ def _coerce_float(value: Any) -> float | None:
         return float(value)
     try:
         text = str(value).strip()
-        if not text:
-            return None
-        return float(text)
+        return float(text) if text else None
     except ValueError:
         return None
 
@@ -288,11 +286,7 @@ def _extract_step_contracts(chain: dict[str, Any]) -> list[dict[str, Any]]:
 
         if show_itm and in_the_money:
             return True
-        if show_otm and not in_the_money:
-            return True
-        if show_ntm and is_ntm:
-            return True
-        return False
+        return True if show_otm and not in_the_money else show_ntm and is_ntm
 
     for map_name in ('callExpDateMap', 'putExpDateMap'):
         exp_map = chain.get(map_name, {}) or {}

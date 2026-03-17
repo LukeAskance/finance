@@ -4,16 +4,18 @@ Coded by Tyler Bowers
 Github: https://github.com/tylerebowers/Schwab-API-Python
 """
 
-import json
-import atexit
 import asyncio
-import logging
+import atexit
 import datetime
-import zoneinfo
+import json
+import logging
 import threading
-import websockets
+import zoneinfo
 from time import sleep
+
+import websockets
 import websockets.exceptions
+
 
 class Stream:
 

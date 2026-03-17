@@ -1,20 +1,20 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Optional, Protocol, cast
-from datetime import date, datetime
-from tempfile import TemporaryDirectory
-import logging
-import json
 import csv
 import glob
+import json
+import logging
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
+from datetime import date, datetime
+from tempfile import TemporaryDirectory
+from typing import Any, Optional, Protocol, cast
+
 from dotenv import load_dotenv
 
 from schwab_api import SchwabAPI
-
 
 logger = logging.getLogger(__name__)
 

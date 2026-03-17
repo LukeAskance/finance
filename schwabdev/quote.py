@@ -6,7 +6,6 @@ import os
 
 from schwab_api import SchwabAPI
 
-
 try:
     import schwabdev
 except ImportError as exc:

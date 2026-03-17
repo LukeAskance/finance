@@ -8,7 +8,6 @@ import logging
 from datetime import datetime
 from typing import Optional, Tuple
 
-
 logger = logging.getLogger(__name__)
 
 
