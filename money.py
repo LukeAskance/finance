@@ -123,6 +123,15 @@ analysis_default_models = {
 }
 
 EQUITY_INCOME_TYPES = {'EQUITY', 'MUTUAL_FUND', 'COLLECTIVE_INVESTMENT'}
+INCOME_ACCOUNT_NAMES = [
+    'GeorgeTrust',
+    'DebRoth',
+    'Investments',
+    'DebTrust',
+    'GrandKids',
+    'GeorgeRoth',
+    'FidelityRoth',
+]
 
 
 def get_api() -> SchwabAPI:
@@ -815,6 +824,7 @@ async def ask_analysis_llm_click() -> None:
             analysis_provider_select.value or 'claude',
             analysis_model_input.value or '',
             bool(analysis_grounded_toggle.value),
+            bool(analysis_general_mode_toggle.value),
         )
         analysis_answer.value = answer_text
         analysis_rows_table.rows = rows
@@ -1001,7 +1011,17 @@ async def income_symbol_analyze_click() -> None:
         income_symbol_button.enable()
 
 
-def _portfolio_income_projection() -> tuple[dict[str, float], list[dict[str, Any]]]:
+def _selected_income_accounts() -> set[str]:
+    selected: set[str] = set()
+    for account_name, checkbox in income_account_checkboxes.items():
+        if bool(checkbox.value):
+            selected.add(account_name)
+    return selected
+
+
+def _portfolio_income_projection(
+    selected_accounts: set[str],
+) -> tuple[dict[str, float], list[dict[str, Any]]]:
     positions = load_portfolio_positions(
         get_api(),
         include_options=False,
@@ -1013,6 +1033,8 @@ def _portfolio_income_projection() -> tuple[dict[str, float], list[dict[str, Any
     events: list[dict[str, Any]] = []
 
     for pos in positions:
+        if selected_accounts and pos.account_name not in selected_accounts:
+            continue
         if pos.position_type not in EQUITY_INCOME_TYPES:
             continue
         if pos.quantity <= 0 or pos.div_pay_amount <= 0 or pos.div_freq <= 0:
@@ -1059,7 +1081,20 @@ async def refresh_portfolio_income_click() -> None:
     income_portfolio_button.disable()
     income_portfolio_button.text = 'Refreshing...'
     try:
-        totals, events = await asyncio.to_thread(_portfolio_income_projection)
+        selected_accounts = _selected_income_accounts()
+        if not selected_accounts:
+            income_month_value.text = '$0.00'
+            income_quarter_value.text = '$0.00'
+            income_year_value.text = '$0.00'
+            income_events_table.rows = []
+            income_events_table.update()
+            ui.notify('Select at least one account', color='warning')
+            return
+
+        totals, events = await asyncio.to_thread(
+            _portfolio_income_projection,
+            selected_accounts,
+        )
         income_month_value.text = f"${totals['month']:,.2f}"
         income_quarter_value.text = f"${totals['quarter']:,.2f}"
         income_year_value.text = f"${totals['year']:,.2f}"
@@ -1070,6 +1105,10 @@ async def refresh_portfolio_income_click() -> None:
     finally:
         income_portfolio_button.text = 'Refresh Portfolio Income'
         income_portfolio_button.enable()
+
+
+def on_income_account_change(_: Any = None) -> None:
+    asyncio.create_task(refresh_portfolio_income_click())
 
 
 def on_analysis_provider_change(_: Any = None) -> None:
@@ -1440,6 +1479,15 @@ with ui.tab_panels(tabs, value=portfolio_tab).classes('w-full'):
 
             with ui.card().classes('w-full'):
                 ui.label('Portfolio Income Projection').classes('text-xl font-semibold')
+                with ui.row().classes('items-center gap-3 w-full'):
+                    ui.label('Accounts:').classes('text-sm font-semibold')
+                    income_account_checkboxes: dict[str, Any] = {}
+                    for account_name in INCOME_ACCOUNT_NAMES:
+                        income_account_checkboxes[account_name] = ui.checkbox(
+                            account_name,
+                            value=True,
+                            on_change=on_income_account_change,
+                        )
                 income_portfolio_button = ui.button(
                     'Refresh Portfolio Income',
                     on_click=refresh_portfolio_income_click,
@@ -1507,6 +1555,10 @@ with ui.tab_panels(tabs, value=portfolio_tab).classes('w-full'):
                 analysis_grounded_toggle = ui.checkbox(
                     'Grounded only',
                     value=True,
+                )
+                analysis_general_mode_toggle = ui.checkbox(
+                    'General assistant mode',
+                    value=False,
                 )
 
             with ui.row().classes('items-center gap-2'):

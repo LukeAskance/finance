@@ -288,27 +288,36 @@ class PortfolioAnalysisEngine:
         question: str,
         model: str,
         grounded_only: bool,
+        general_mode: bool = False,
     ) -> str:
         api_key = os.getenv('ANTHROPIC_API_KEY')
         if not api_key:
             return 'Missing ANTHROPIC_API_KEY in environment.'
 
         snapshot = self._snapshot_payload()
-        grounding = (
-            'Answer ONLY using the provided portfolio snapshot data. '
-            'If the answer is not present in the data, say so explicitly.'
-            if grounded_only
-            else 'You may answer generally, but prioritize the provided portfolio snapshot when relevant.'
-        )
-        system = (
-            'You are a portfolio analysis assistant. '
-            f'{grounding} '
-            'Be concise and include concrete symbols/values when available.'
-        )
+
+        if general_mode:
+            system = (
+                'You are a helpful assistant. You have access to the user\'s portfolio data for context when relevant. '
+                'Be concise and include concrete symbols/values when available.'
+            )
+        else:
+            grounding = (
+                'Answer ONLY using the provided portfolio snapshot data. '
+                'If the answer is not present in the data, say so explicitly.'
+                if grounded_only
+                else 'You may answer generally, but prioritize the provided portfolio snapshot when relevant.'
+            )
+            system = (
+                'You are a portfolio analysis assistant. '
+                f'{grounding} '
+                'Be concise and include concrete symbols/values when available.'
+            )
 
         user_text = (
-            f'Portfolio snapshot JSON:\n{json.dumps(snapshot, indent=2)}\n\n'
-            f'Question: {question}'
+            f'Here is my current portfolio for reference:\n{json.dumps(snapshot, indent=2)}\n\n{question}'
+            if general_mode
+            else f'Portfolio snapshot JSON:\n{json.dumps(snapshot, indent=2)}\n\nQuestion: {question}'
         )
 
         candidate_models = [
@@ -377,26 +386,36 @@ class PortfolioAnalysisEngine:
         question: str,
         model: str,
         grounded_only: bool,
+        general_mode: bool = False,
     ) -> str:
         api_key = os.getenv('PERPLEXITY_API_KEY')
         if not api_key:
             return 'Missing PERPLEXITY_API_KEY in environment.'
 
         snapshot = self._snapshot_payload()
-        grounding = (
-            'Answer ONLY using the provided portfolio snapshot data. '
-            'If unavailable in that data, state that clearly.'
-            if grounded_only
-            else 'You may answer generally, but prioritize the provided portfolio snapshot when relevant.'
-        )
-        system_text = (
-            'You are a portfolio analysis assistant. '
-            f'{grounding} '
-            'Be concise and include concrete symbols/values when available.'
-        )
+
+        if general_mode:
+            system_text = (
+                'You are a helpful assistant. You have access to the user\'s portfolio data for context when relevant. '
+                'Be concise and include concrete symbols/values when available.'
+            )
+        else:
+            grounding = (
+                'Answer ONLY using the provided portfolio snapshot data. '
+                'If unavailable in that data, state that clearly.'
+                if grounded_only
+                else 'You may answer generally, but prioritize the provided portfolio snapshot when relevant.'
+            )
+            system_text = (
+                'You are a portfolio analysis assistant. '
+                f'{grounding} '
+                'Be concise and include concrete symbols/values when available.'
+            )
+
         user_text = (
-            f'Portfolio snapshot JSON:\n{json.dumps(snapshot, indent=2)}\n\n'
-            f'Question: {question}'
+            f'Here is my current portfolio for reference:\n{json.dumps(snapshot, indent=2)}\n\n{question}'
+            if general_mode
+            else f'Portfolio snapshot JSON:\n{json.dumps(snapshot, indent=2)}\n\nQuestion: {question}'
         )
 
         payload = {
@@ -440,6 +459,7 @@ class PortfolioAnalysisEngine:
         provider: str = 'claude',
         model: str = '',
         grounded_only: bool = True,
+        general_mode: bool = False,
     ) -> tuple[str, list[dict[str, Any]]]:
         q = question.strip()
         if not q:
@@ -451,10 +471,10 @@ class PortfolioAnalysisEngine:
         provider_key = provider.strip().lower()
         if provider_key == 'perplexity':
             use_model = model.strip() or 'sonar'
-            answer = self._call_perplexity(q, use_model, grounded_only)
+            answer = self._call_perplexity(q, use_model, grounded_only, general_mode)
         else:
             use_model = model.strip() or 'claude-sonnet-4-20250514'
-            answer = self._call_claude(q, use_model, grounded_only)
+            answer = self._call_claude(q, use_model, grounded_only, general_mode)
 
         evidence_rows = self._rows(self._snapshot[:40]) if grounded_only else []
         return answer, evidence_rows
