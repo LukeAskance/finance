@@ -7,12 +7,13 @@ import subprocess
 import sys
 import time
 from contextlib import suppress
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from dotenv import load_dotenv
 from nicegui import ui
 
+import historicals_store
 import options
 import utilities
 from analysis_module import PortfolioAnalysisEngine
@@ -36,6 +37,7 @@ except ImportError as exc:
 SchwabClient: Any = _SchwabClient
 
 load_dotenv()
+historicals_store.init_db('/Users/george/code/money/portfolio.db')
 
 dark_mode = ui.dark_mode()
 dark_mode.enable()
@@ -100,13 +102,53 @@ def _render_historicals_plot(
             return
 
         with ui.pyplot(figsize=(16, 7), close=False).classes('w-full'):
-            utilities.draw_historical_series(
+            utilities.draw_historicals_series(
                 symbol_series,
                 normalize=normalize,
                 title='Historical Stock Prices',
             )
 
 
+def _render_portfolio_totals_plot(rows: list[dict[str, Any]]) -> None:
+    import matplotlib.pyplot as plt
+
+    historicals_totals_plot_host.clear()
+    with historicals_totals_plot_host:
+        if not rows:
+            ui.label('No portfolio totals yet. Capture a daily snapshot.').classes('text-sm text-orange')
+            return
+
+        with ui.pyplot(figsize=(14, 4.5), close=False).classes('w-full'):
+            xs = [datetime.strptime(r['date'], '%Y-%m-%d') for r in rows]
+            ys = [float(r['total_market_value']) for r in rows]
+            plt.plot(xs, ys, marker='o', linewidth=1.6)
+            plt.grid(True, linestyle='--', alpha=0.45)
+            plt.xlabel('UTC Date')
+            plt.ylabel('Portfolio Total ($)')
+            plt.title('Portfolio Total Over Time')
+            plt.tight_layout()
+
+
+def _render_account_totals_plot(series: dict[str, list[tuple[str, float]]]) -> None:
+    import matplotlib.pyplot as plt
+
+    historicals_accounts_plot_host.clear()
+    with historicals_accounts_plot_host:
+        if not series:
+            ui.label('No account totals yet.').classes('text-sm text-orange')
+            return
+
+        with ui.pyplot(figsize=(14, 5), close=False).classes('w-full'):
+            for account, points in series.items():
+                xs = [datetime.strptime(d, '%Y-%m-%d') for d, _ in points]
+                ys = [float(v) for _, v in points]
+                plt.plot(xs, ys, marker='o', linewidth=1.2, label=account)
+            plt.grid(True, linestyle='--', alpha=0.45)
+            plt.xlabel('UTC Date')
+            plt.ylabel('Account Total ($)')
+            plt.title('Account Totals Over Time')
+            plt.legend()
+            plt.tight_layout()
 
 
 api: SchwabAPI | None = None
@@ -868,6 +910,61 @@ async def on_historicals_mode_change(_: Any = None) -> None:
     await plot_historicals_click(silent_if_incomplete=True)
 
 
+async def refresh_historical_totals_click() -> None:
+    days = _coerce_int(historicals_totals_days_input.value)
+    if days is None or days <= 0:
+        ui.notify('Days must be a positive integer', color='warning')
+        return
+
+    historicals_refresh_button.disable()
+    historicals_refresh_button.text = 'Refreshing...'
+    try:
+        payload = await asyncio.to_thread(historicals_store.get_totals_payload, days)
+        portfolio_rows = payload.get('portfolio_rows', [])
+        account_rows = payload.get('account_rows', [])
+        account_series = payload.get('account_series', {})
+
+        historicals_portfolio_table.rows = portfolio_rows
+        historicals_portfolio_table.update()
+        historicals_account_table.rows = account_rows
+        historicals_account_table.update()
+
+        _render_portfolio_totals_plot(portfolio_rows)
+        _render_account_totals_plot(account_series)
+
+        historicals_status_value.text = (
+            f'Loaded {len(portfolio_rows)} portfolio points, '
+            f'{len(account_rows)} account rows'
+        )
+    except Exception as exc:
+        historicals_status_value.text = f'Historical refresh error: {exc}'
+    finally:
+        historicals_refresh_button.text = 'Refresh Totals'
+        historicals_refresh_button.enable()
+
+
+async def capture_daily_snapshot_click() -> None:
+    capture_snapshot_button.disable()
+    capture_snapshot_button.text = 'Capturing...'
+    try:
+        utc_today = datetime.now(timezone.utc).date()
+        result = await asyncio.to_thread(
+            historicals_store.capture_snapshot_from_positions,
+            get_api(),
+            utc_today,
+        )
+        historicals_status_value.text = (
+            f"Captured UTC {result['date']} "
+            f"({result['positions']} positions, {result['accounts']} accounts)"
+        )
+        await refresh_historical_totals_click()
+    except Exception as exc:
+        historicals_status_value.text = f'Snapshot capture error: {exc}'
+    finally:
+        capture_snapshot_button.text = 'Capture Daily Snapshot (UTC)'
+        capture_snapshot_button.enable()
+
+
 def _parse_iso_date(value: Any) -> date | None:
     if not value:
         return None
@@ -1375,6 +1472,64 @@ with ui.tab_panels(tabs, value=portfolio_tab).classes('w-full'):
                 historicals_plot_host = ui.column().classes('w-full')
                 ui.label('Click Plot to render chart').classes('text-sm text-gray')
 
+            with ui.card().classes('w-full'):
+                ui.label('Portfolio History (UTC Daily Snapshots)').classes('text-xl font-semibold')
+                with ui.row().classes('items-center gap-3 w-full'):
+                    capture_snapshot_button = ui.button(
+                        'Capture Daily Snapshot (UTC)',
+                        on_click=capture_daily_snapshot_click,
+                    )
+                    historicals_totals_days_input = ui.input(
+                        'Lookback days',
+                        value='365',
+                    ).props('type=number min=1').classes('w-32')
+                    historicals_refresh_button = ui.button(
+                        'Refresh Totals',
+                        on_click=refresh_historical_totals_click,
+                    )
+                    historicals_status_value = ui.label('No snapshots yet').classes('text-sm')
+
+                with ui.row().classes('w-full gap-4 items-start no-wrap'):
+                    with ui.column().classes('w-1/2 min-w-0'):
+                        historicals_portfolio_table = ui.table(
+                            columns=[
+                                {'name': 'date', 'label': 'UTC Date', 'field': 'date'},
+                                {
+                                    'name': 'total_market_value',
+                                    'label': 'Portfolio Total',
+                                    'field': 'total_market_value',
+                                    'align': 'right',
+                                },
+                            ],
+                            rows=[],
+                        ).classes('w-full')
+                        historicals_portfolio_table.props('pagination={"rowsPerPage": 10}')
+
+                    with ui.column().classes('w-1/2 min-w-0'):
+                        historicals_account_table = ui.table(
+                            columns=[
+                                {'name': 'date', 'label': 'UTC Date', 'field': 'date'},
+                                {'name': 'account', 'label': 'Account', 'field': 'account'},
+                                {
+                                    'name': 'total_market_value',
+                                    'label': 'Account Total',
+                                    'field': 'total_market_value',
+                                    'align': 'right',
+                                },
+                                {
+                                    'name': 'cash_balance',
+                                    'label': 'Cash',
+                                    'field': 'cash_balance',
+                                    'align': 'right',
+                                },
+                            ],
+                            rows=[],
+                        ).classes('w-full')
+                        historicals_account_table.props('pagination={"rowsPerPage": 10}')
+
+                historicals_totals_plot_host = ui.column().classes('w-full')
+                historicals_accounts_plot_host = ui.column().classes('w-full')
+
     with ui.tab_panel(income_tab):
         with ui.column().classes('w-full gap-4'):
             with ui.card().classes('w-full'):
@@ -1601,4 +1756,4 @@ with ui.tab_panels(tabs, value=portfolio_tab).classes('w-full'):
             )
 
 
-ui.run(port=8000, reload=False, )
+ui.run(port=8000, reload=False)
