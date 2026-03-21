@@ -102,7 +102,7 @@ def _render_historicals_plot(
             return
 
         with ui.pyplot(figsize=(16, 7), close=False).classes('w-full'):
-            utilities.draw_historicals_series(
+            utilities.draw_historical_series(
                 symbol_series,
                 normalize=normalize,
                 title='Historical Stock Prices',
@@ -945,7 +945,7 @@ async def refresh_historical_totals_click() -> None:
 
 async def capture_daily_snapshot_click() -> None:
     capture_snapshot_button.disable()
-    capture_snapshot_button.text = 'Capturing...'
+    capture_snapshot_button.text = 'Fetching...'
     try:
         utc_today = datetime.now(timezone.utc).date()
         result = await asyncio.to_thread(
@@ -954,14 +954,14 @@ async def capture_daily_snapshot_click() -> None:
             utc_today,
         )
         historicals_status_value.text = (
-            f"Captured UTC {result['date']} "
+            f"Fetched UTC {result['date']} "
             f"({result['positions']} positions, {result['accounts']} accounts)"
         )
         await refresh_historical_totals_click()
     except Exception as exc:
-        historicals_status_value.text = f'Snapshot capture error: {exc}'
+        historicals_status_value.text = f'Snapshot fetch error: {exc}'
     finally:
-        capture_snapshot_button.text = 'Capture Daily Snapshot (UTC)'
+        capture_snapshot_button.text = 'Fetch Daily Snapshot (UTC)'
         capture_snapshot_button.enable()
 
 
@@ -984,7 +984,8 @@ def _build_symbol_dividend_payload(
 ) -> dict[str, Any]:
     if DividendForecaster is None:
         raise RuntimeError(
-            f'dividend_prediction unavailable: {_dividend_prediction_import_error}'
+            f'dividend_prediction unavailable: '
+            f'{_dividend_prediction_import_error}'
         )
 
     forecaster = DividendForecaster.from_yfinance(symbol, shares=shares)
@@ -1018,15 +1019,15 @@ def _build_symbol_dividend_payload(
     bull = result.scenarios.get('bull')
     projection_rows: list[dict[str, Any]] = []
     if base and bear and bull:
-        for idx, year in enumerate(base.years):
-            projection_rows.append(
-                {
-                    'year': year,
-                    'bear_income': round(bear.annual_dividends[idx] * shares, 2),
-                    'base_income': round(base.annual_dividends[idx] * shares, 2),
-                    'bull_income': round(bull.annual_dividends[idx] * shares, 2),
-                }
-            )
+        projection_rows.extend(
+            {
+                'year': year,
+                'bear_income': round(bear.annual_dividends[idx] * shares, 2),
+                'base_income': round(base.annual_dividends[idx] * shares, 2),
+                'bull_income': round(bull.annual_dividends[idx] * shares, 2),
+            }
+            for idx, year in enumerate(base.years)
+        )
 
     return {
         'summary': result.summary(),
@@ -1476,7 +1477,7 @@ with ui.tab_panels(tabs, value=portfolio_tab).classes('w-full'):
                 ui.label('Portfolio History (UTC Daily Snapshots)').classes('text-xl font-semibold')
                 with ui.row().classes('items-center gap-3 w-full'):
                     capture_snapshot_button = ui.button(
-                        'Capture Daily Snapshot (UTC)',
+                        'Fetch Daily Snapshot (UTC)',
                         on_click=capture_daily_snapshot_click,
                     )
                     historicals_totals_days_input = ui.input(
@@ -1484,7 +1485,7 @@ with ui.tab_panels(tabs, value=portfolio_tab).classes('w-full'):
                         value='365',
                     ).props('type=number min=1').classes('w-32')
                     historicals_refresh_button = ui.button(
-                        'Refresh Totals',
+                        'Display Totals',
                         on_click=refresh_historical_totals_click,
                     )
                     historicals_status_value = ui.label('No snapshots yet').classes('text-sm')
