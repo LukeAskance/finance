@@ -42,18 +42,11 @@ class PortfolioAnalysisEngine:
     def snapshot(self) -> list[PortfolioRecord]:
         return self._snapshot
 
-    def refresh_snapshot(
-        self,
-        api: Any,
-        include_fidelity: bool = True,
-        aggregate_by_symbol: bool = True,
-    ) -> int:
-        positions = load_portfolio_positions(
-            api,
-            include_fidelity=include_fidelity,
-            include_options=True,
-            include_cash=True,
-        )
+    def refresh_snapshot_from_positions(self, positions: list[Any]) -> int:
+        # Move the existing body of refresh_snapshot here, starting from the
+        # point after positions have already been loaded.
+        loaded_positions = list(positions)
+
         records: list[PortfolioRecord] = []
         records.extend(
             PortfolioRecord(
@@ -65,15 +58,33 @@ class PortfolioAnalysisEngine:
                 last_price=float(p.last_price),
                 description=str(p.description),
             )
-            for p in positions
+            for p in loaded_positions
         )
 
-        if aggregate_by_symbol:
-            records = self._aggregate_records(records)
+        # ! if aggregate_by_symbol:
+        records = self._aggregate_records(records)
 
         self._snapshot = records
         self._as_of = datetime.now()
         return len(records)
+
+    def refresh_snapshot(
+        self,
+        api: Any,
+        include_fidelity: bool = True,
+        include_options: bool = True,
+        include_cash: bool = True,
+        positions: list[Any] | None = None,
+    ) -> int:
+        loaded_positions = positions
+        if loaded_positions is None:
+            loaded_positions = load_portfolio_positions(
+                api,
+                include_fidelity=include_fidelity,
+                include_options=include_options,
+                include_cash=include_cash,
+            )
+        return self.refresh_snapshot_from_positions(list(loaded_positions))
 
     def _aggregate_records(
         self,

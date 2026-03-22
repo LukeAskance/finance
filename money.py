@@ -102,7 +102,7 @@ def _render_historicals_plot(
             return
 
         with ui.pyplot(figsize=(16, 7), close=False).classes('w-full'):
-            utilities.draw_historical_series(
+            utilities.draw_historicals_series(
                 symbol_series,
                 normalize=normalize,
                 title='Historical Stock Prices',
@@ -153,6 +153,9 @@ def _render_account_totals_plot(series: dict[str, list[tuple[str, float]]]) -> N
 
 api: SchwabAPI | None = None
 original_portfolio_rows: list[dict[str, Any]] = []
+portfolio_snapshot_positions: list[Any] = []
+portfolio_snapshot_rows: list[dict[str, Any]] = []
+portfolio_snapshot_as_of: datetime | None = None
 raw_chain_data: dict[str, Any] | None = None
 pending_chain_render_task: asyncio.Task[Any] | None = None
 chain_dte_min: int | None = None
@@ -446,6 +449,54 @@ def _set_chain_step_contracts(chain: dict[str, Any]) -> None:
     _update_chain_step_display()
 
 
+def _underlying_symbol(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    return str(getattr(value, 'symbol', value))
+
+
+def _build_portfolio_rows_from_positions(positions: list[Any]) -> list[dict[str, Any]]:
+    rows = [
+        {
+            'symbol': p.symbol,
+            'type': p.position_type,
+            'account': p.account_name,
+            'underlying': _underlying_symbol(p.underlying),
+            'quantity': round(float(p.quantity), 4),
+            'last': round(float(p.last_price), 4),
+            'market_value': round(float(p.market_value), 2),
+            'pl': round(float(p.pl_total), 2),
+        }
+        for p in positions
+    ]
+    rows.sort(key=lambda r: float(r.get('market_value', 0.0)), reverse=True)
+    return rows
+
+
+async def ensure_portfolio_snapshot(
+    force_refresh: bool = False,
+) -> tuple[list[Any], list[dict[str, Any]]]:
+    global portfolio_snapshot_positions, portfolio_snapshot_rows, portfolio_snapshot_as_of
+
+    if portfolio_snapshot_positions and not force_refresh:
+        return portfolio_snapshot_positions, portfolio_snapshot_rows
+
+    positions = await asyncio.to_thread(
+        load_portfolio_positions,
+        get_api(),
+        include_fidelity=True,
+        include_options=True,
+        include_cash=True,
+    )
+    rows = _build_portfolio_rows_from_positions(list(positions))
+
+    portfolio_snapshot_positions = list(positions)
+    portfolio_snapshot_rows = rows
+    portfolio_snapshot_as_of = datetime.now()
+
+    return portfolio_snapshot_positions, portfolio_snapshot_rows
+
+
 def on_chain_step_filter_change(_: Any = None) -> None:
     if filtered_chain_data is None:
         _set_chain_step_contracts({})
@@ -630,6 +681,28 @@ def quote_number(quote_data: dict[str, Any], *keys: str) -> str:
             return f'{value}'
     return '-'
 
+async def refresh_analysis_snapshot_click() -> None:
+    analysis_refresh_button.disable()
+    analysis_refresh_button.text = 'Rebuilding...'
+    try:
+        positions, _ = await ensure_portfolio_snapshot(force_refresh=False)
+        count = await asyncio.to_thread(
+            analysis_engine.refresh_snapshot_from_positions,
+            positions,
+        )
+        as_of = analysis_engine.as_of.strftime('%Y-%m-%d %H:%M:%S') if analysis_engine.as_of else '-'
+        analysis_status_value.text = (
+            f'{count} aggregated positions loaded @ {as_of}'
+        )
+        analysis_rows_table.rows = []
+        analysis_rows_table.update()
+        analysis_answer.value = 'Analysis rebuilt from shared portfolio snapshot.'
+    except Exception as exc:
+        analysis_answer.value = f'Analysis refresh error: {exc}'
+    finally:
+        analysis_refresh_button.text = 'Rebuild Analysis'
+        analysis_refresh_button.enable()
+
 
 async def get_quote_click():
     symbol = symbol_input.value.strip()
@@ -743,20 +816,54 @@ def on_chain_dte_change(_: Any = None) -> None:
     schedule_chain_render()
 
 
+async def refresh_portfolio_snapshot_click() -> None:
+    global original_portfolio_rows
+
+    refresh_portfolio_snapshot_button.disable()
+    refresh_portfolio_snapshot_button.text = 'Refreshing...'
+    portfolio_snapshot_status_value.text = 'Refreshing shared portfolio snapshot...'
+    try:
+        positions, rows = await ensure_portfolio_snapshot(force_refresh=True)
+        original_portfolio_rows = [dict(row) for row in rows]
+        portfolio_table.rows = [dict(row) for row in rows]
+        portfolio_table.update()
+
+        analysis_rows_table.rows = []
+        analysis_rows_table.update()
+        analysis_answer.value = 'Shared portfolio snapshot refreshed.'
+
+        portfolio_snapshot_status_value.text = (
+            f'Refresh successful: {len(positions)} positions, '
+            f'{len(rows)} rows @ '
+            f'{portfolio_snapshot_as_of.strftime("%Y-%m-%d %H:%M:%S")}'
+        )
+        ui.notify(
+            f'Refreshed shared snapshot: {len(positions)} positions',
+            color='positive',
+        )
+    except Exception as exc:
+        portfolio_snapshot_status_value.text = f'Refresh failed: {exc}'
+        ui.notify(f'Portfolio snapshot refresh failed: {exc}', color='negative')
+    finally:
+        refresh_portfolio_snapshot_button.text = 'Refresh Portfolio Snapshot'
+        refresh_portfolio_snapshot_button.enable()
+
+
 async def load_portfolio_click():
     global original_portfolio_rows
+
     load_portfolio_button.disable()
-    load_portfolio_button.text = 'Loading...'
+    load_portfolio_button.text = 'Displaying...'
     try:
-        rows = await asyncio.to_thread(fetch_portfolio_rows)
+        _, rows = await ensure_portfolio_snapshot(force_refresh=False)
         original_portfolio_rows = [dict(row) for row in rows]
-        portfolio_table.rows = rows
+        portfolio_table.rows = [dict(row) for row in rows]
         portfolio_table.update()
-        ui.notify(f'Loaded {len(rows)} portfolio rows', color='positive')
+        ui.notify(f'Displayed {len(rows)} portfolio rows', color='positive')
     except Exception as exc:
-        ui.notify(f'Portfolio load failed: {exc}', color='negative')
+        ui.notify(f'Portfolio display failed: {exc}', color='negative')
     finally:
-        load_portfolio_button.text = 'Load Portfolio'
+        load_portfolio_button.text = 'Display Portfolio'
         load_portfolio_button.enable()
 
 
@@ -796,30 +903,6 @@ async def exit_app_click():
 
     loop = asyncio.get_running_loop()
     loop.call_later(0.2, lambda: os._exit(0))
-
-
-async def refresh_analysis_snapshot_click() -> None:
-    analysis_refresh_button.disable()
-    analysis_refresh_button.text = 'Refreshing...'
-    try:
-        count = await asyncio.to_thread(
-            analysis_engine.refresh_snapshot,
-            get_api(),
-            True,
-            True,
-        )
-        as_of = analysis_engine.as_of.strftime('%Y-%m-%d %H:%M:%S') if analysis_engine.as_of else '-'
-        analysis_status_value.text = (
-            f'{count} aggregated positions loaded @ {as_of}'
-        )
-        analysis_rows_table.rows = []
-        analysis_rows_table.update()
-        analysis_answer.value = 'Snapshot refreshed. Ask a question below.'
-    except Exception as exc:
-        analysis_answer.value = f'Analysis refresh error: {exc}'
-    finally:
-        analysis_refresh_button.text = 'Refresh Snapshot'
-        analysis_refresh_button.enable()
 
 
 async def ask_analysis_click() -> None:
@@ -947,10 +1030,11 @@ async def capture_daily_snapshot_click() -> None:
     capture_snapshot_button.disable()
     capture_snapshot_button.text = 'Fetching...'
     try:
+        positions, _ = await ensure_portfolio_snapshot(force_refresh=False)
         utc_today = datetime.now(timezone.utc).date()
         result = await asyncio.to_thread(
-            historicals_store.capture_snapshot_from_positions,
-            get_api(),
+            historicals_store.capture_snapshot_from_loaded_positions,
+            positions,
             utc_today,
         )
         historicals_status_value.text = (
@@ -1113,13 +1197,8 @@ def _selected_income_accounts() -> set[str]:
 
 def _portfolio_income_projection(
     selected_accounts: set[str],
+    positions: list[Any],
 ) -> tuple[dict[str, float], list[dict[str, Any]]]:
-    positions = load_portfolio_positions(
-        get_api(),
-        include_options=False,
-        include_cash=False,
-    )
-
     today = date.today()
     horizon = today + timedelta(days=365)
     events: list[dict[str, Any]] = []
@@ -1183,9 +1262,11 @@ async def refresh_portfolio_income_click() -> None:
             ui.notify('Select at least one account', color='warning')
             return
 
+        positions, _ = await ensure_portfolio_snapshot(force_refresh=False)
         totals, events = await asyncio.to_thread(
             _portfolio_income_projection,
             selected_accounts,
+            positions,
         )
         income_month_value.text = f"${totals['month']:,.2f}"
         income_quarter_value.text = f"${totals['quarter']:,.2f}"
@@ -1201,6 +1282,28 @@ async def refresh_portfolio_income_click() -> None:
 
 def on_income_account_change(_: Any = None) -> None:
     asyncio.create_task(refresh_portfolio_income_click())
+
+# ...existing code...
+
+async def refresh_analysis_snapshot_click() -> None:
+    analysis_refresh_button.disable()
+    analysis_refresh_button.text = 'Rebuilding...'
+    try:
+        positions, _ = await ensure_portfolio_snapshot(force_refresh=False)
+        count = await asyncio.to_thread(
+            analysis_engine.refresh_snapshot_from_positions,
+            positions,
+        )
+        as_of = analysis_engine.as_of.strftime('%Y-%m-%d %H:%M:%S') if analysis_engine.as_of else '-'
+        analysis_status_value.text = f'{count} aggregated positions loaded @ {as_of}'
+        analysis_rows_table.rows = []
+        analysis_rows_table.update()
+        analysis_answer.value = 'Analysis rebuilt from shared portfolio snapshot.'
+    except Exception as exc:
+        analysis_answer.value = f'Analysis refresh error: {exc}'
+    finally:
+        analysis_refresh_button.text = 'Rebuild Analysis'
+        analysis_refresh_button.enable()
 
 
 def on_analysis_provider_change(_: Any = None) -> None:
@@ -1224,6 +1327,14 @@ with ui.tab_panels(tabs, value=portfolio_tab).classes('w-full'):
     with ui.tab_panel(dashboard_tab):
         with ui.card().classes('w-full'):
             ui.label('Dashboard').classes('text-xl font-semibold')
+            with ui.row().classes('items-center gap-3'):
+                refresh_portfolio_snapshot_button = ui.button(
+                    'Refresh Portfolio Snapshot',
+                    on_click=refresh_portfolio_snapshot_click,
+                )
+                portfolio_snapshot_status_value = ui.label(
+                    'No shared snapshot loaded'
+                ).classes('text-sm')
             ui.button('Exit Application', on_click=exit_app_click)
 
     with ui.tab_panel(portfolio_tab):
@@ -1262,9 +1373,12 @@ with ui.tab_panels(tabs, value=portfolio_tab).classes('w-full'):
                 with ui.card().classes('w-full'):
                     ui.label('Portfolio Actions').classes('text-xl font-semibold')
                     load_portfolio_button = ui.button(
-                        'Load Portfolio',
+                        'Display Portfolio',
                         on_click=load_portfolio_click,
                     )
+                    portfolio_actions_status_value = ui.label(
+                        'No shared snapshot loaded'
+                    ).classes('text-sm')
                     ui.button('aggregate', on_click=aggregate_click)
                     ui.button('unaggregate', on_click=unaggregate_click)
 
@@ -1680,7 +1794,7 @@ with ui.tab_panels(tabs, value=portfolio_tab).classes('w-full'):
             ui.label('Portfolio Analysis').classes('text-xl font-semibold')
             with ui.row().classes('items-center gap-2'):
                 analysis_refresh_button = ui.button(
-                    'Refresh Snapshot',
+                    'Rebuild Analysis',
                     on_click=refresh_analysis_snapshot_click,
                 )
                 analysis_status_value = ui.label('No snapshot loaded').classes(

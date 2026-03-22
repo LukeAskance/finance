@@ -65,7 +65,7 @@ def collect_historical_series(
     return series
 
 
-def draw_historical_series(
+def draw_historicals_series(
     symbol_series: dict[str, list[tuple[datetime, float]]],
     normalize: bool,
     title: str = 'Historical Stock Prices',

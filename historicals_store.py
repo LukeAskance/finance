@@ -208,95 +208,128 @@ def _get_or_create_instrument(session: Session, symbol: str, instrument_type: st
     return row
 
 
-def capture_snapshot_from_positions(api: Any, snapshot_utc_date: date | None = None) -> dict[str, Any]:
+def _write_snapshot_rows(
+    session: Session,
+    positions: list[Any],
+    snapshot_date: date,
+) -> dict[str, Any]:
+    account_totals: dict[int, dict[str, float]] = {}
+    rolled_positions: dict[tuple[int, int], dict[str, Any]] = {}
+    position_count = 0
+
+    for p in positions:
+        symbol = str(getattr(p, "symbol", "") or "").strip().upper()
+        account_name = str(getattr(p, "account_name", "") or "").strip()
+        if not symbol or not account_name:
+            continue
+
+        instrument_type = _instrument_type_from_position_type(getattr(p, "position_type", ""))
+        account = _get_or_create_account(session, account_name)
+        instrument = _get_or_create_instrument(session, symbol, instrument_type)
+
+        quantity = _coerce_float(getattr(p, "quantity", 0.0))
+        market_value = _coerce_float(getattr(p, "market_value", 0.0))
+        last_price = _coerce_float(getattr(p, "last_price", 0.0))
+
+        key = (account.id, instrument.id)
+        rolled = rolled_positions.setdefault(
+            key,
+            {
+                "account_id": account.id,
+                "instrument_id": instrument.id,
+                "quantity": 0.0,
+                "market_value": 0.0,
+                "last_price": 0.0,
+            },
+        )
+        rolled["quantity"] += quantity
+        rolled["market_value"] += market_value
+        rolled["last_price"] = last_price
+        position_count += 1
+
+        totals = account_totals.setdefault(
+            account.id,
+            {"total_market_value": 0.0, "cash_balance": 0.0},
+        )
+        totals["total_market_value"] += market_value
+        if instrument_type == "cash":
+            totals["cash_balance"] += market_value
+
+    for rolled in rolled_positions.values():
+        stmt = (
+            sqlite_insert(DailyPositionSnapshot)
+            .values(
+                date=snapshot_date,
+                account_id=rolled["account_id"],
+                instrument_id=rolled["instrument_id"],
+                quantity=rolled["quantity"],
+                market_value=rolled["market_value"],
+                last_price=rolled["last_price"],
+                average_cost=None,
+            )
+            .on_conflict_do_update(
+                index_elements=["date", "account_id", "instrument_id"],
+                set_={
+                    "quantity": rolled["quantity"],
+                    "market_value": rolled["market_value"],
+                    "last_price": rolled["last_price"],
+                    "average_cost": None,
+                },
+            )
+        )
+        session.execute(stmt)
+
+    for account_id, totals in account_totals.items():
+        stmt = (
+            sqlite_insert(DailyAccountSnapshot)
+            .values(
+                date=snapshot_date,
+                account_id=account_id,
+                total_market_value=totals["total_market_value"],
+                cash_balance=totals["cash_balance"],
+                unrealized_pnl=0.0,
+                realized_pnl_to_date=0.0,
+            )
+            .on_conflict_do_update(
+                index_elements=["date", "account_id"],
+                set_={
+                    "total_market_value": totals["total_market_value"],
+                    "cash_balance": totals["cash_balance"],
+                    "unrealized_pnl": 0.0,
+                    "realized_pnl_to_date": 0.0,
+                },
+            )
+        )
+        session.execute(stmt)
+
+    return {
+        "date": snapshot_date.isoformat(),
+        "positions": position_count,
+        "accounts": len(account_totals),
+    }
+
+
+def capture_snapshot_from_loaded_positions(
+    positions: list[Any],
+    snapshot_utc_date: date | None = None,
+) -> dict[str, Any]:
     snapshot_date = snapshot_utc_date or datetime.now(timezone.utc).date()
+
+    with session_scope() as session:
+        session.execute(delete(DailyPositionSnapshot).where(DailyPositionSnapshot.date == snapshot_date))
+        session.execute(delete(DailyAccountSnapshot).where(DailyAccountSnapshot.date == snapshot_date))
+        session.flush()
+        return _write_snapshot_rows(session, list(positions), snapshot_date)
+
+
+def capture_snapshot_from_positions(api: Any, snapshot_utc_date: date | None = None) -> dict[str, Any]:
     positions = load_portfolio_positions(
         api,
         include_fidelity=True,
         include_options=True,
         include_cash=True,
     )
-
-    with session_scope() as session:
-        session.execute(delete(DailyPositionSnapshot).where(DailyPositionSnapshot.date == snapshot_date))
-        session.execute(delete(DailyAccountSnapshot).where(DailyAccountSnapshot.date == snapshot_date))
-        session.flush()
-
-        account_totals: dict[int, dict[str, float]] = {}
-        position_count = 0
-
-        for p in positions:
-            symbol = str(getattr(p, "symbol", "") or "").strip().upper()
-            account_name = str(getattr(p, "account_name", "") or "").strip()
-            if not symbol or not account_name:
-                continue
-
-            instrument_type = _instrument_type_from_position_type(getattr(p, "position_type", ""))
-            account = _get_or_create_account(session, account_name)
-            instrument = _get_or_create_instrument(session, symbol, instrument_type)
-
-            quantity = _coerce_float(getattr(p, "quantity", 0.0))
-            market_value = _coerce_float(getattr(p, "market_value", 0.0))
-            last_price = _coerce_float(getattr(p, "last_price", 0.0))
-
-            # upsert: if same (date, account, instrument) appears twice, merge values
-            stmt = (
-                sqlite_insert(DailyPositionSnapshot)
-                .values(
-                    date=snapshot_date,
-                    account_id=account.id,
-                    instrument_id=instrument.id,
-                    quantity=quantity,
-                    market_value=market_value,
-                    last_price=last_price,
-                    average_cost=None,
-                )
-                .on_conflict_do_update(
-                    index_elements=["date", "account_id", "instrument_id"],
-                    set_={
-                        "quantity": DailyPositionSnapshot.quantity + quantity,
-                        "market_value": DailyPositionSnapshot.market_value + market_value,
-                        "last_price": last_price,
-                    },
-                )
-            )
-            session.execute(stmt)
-            position_count += 1
-
-            totals = account_totals.setdefault(
-                account.id,
-                {"total_market_value": 0.0, "cash_balance": 0.0},
-            )
-            totals["total_market_value"] += market_value
-            if instrument_type == "cash":
-                totals["cash_balance"] += market_value
-
-        for account_id, totals in account_totals.items():
-            stmt = (
-                sqlite_insert(DailyAccountSnapshot)
-                .values(
-                    date=snapshot_date,
-                    account_id=account_id,
-                    total_market_value=totals["total_market_value"],
-                    cash_balance=totals["cash_balance"],
-                    unrealized_pnl=0.0,
-                    realized_pnl_to_date=0.0,
-                )
-                .on_conflict_do_update(
-                    index_elements=["date", "account_id"],
-                    set_={
-                        "total_market_value": totals["total_market_value"],
-                        "cash_balance": totals["cash_balance"],
-                    },
-                )
-            )
-            session.execute(stmt)
-
-        return {
-            "date": snapshot_date.isoformat(),
-            "positions": position_count,
-            "accounts": len(account_totals),
-        }
+    return capture_snapshot_from_loaded_positions(list(positions), snapshot_utc_date)
 
 
 def get_totals_payload(days: int = 365) -> dict[str, Any]:
