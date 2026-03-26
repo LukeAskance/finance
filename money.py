@@ -115,7 +115,8 @@ def _render_portfolio_totals_plot(rows: list[dict[str, Any]]) -> None:
     historicals_totals_plot_host.clear()
     with historicals_totals_plot_host:
         if not rows:
-            ui.label('No portfolio totals yet. Capture a daily snapshot.').classes('text-sm text-orange')
+            ui.label('No portfolio totals yet. '
+                     'Capture a daily snapshot.').classes('text-sm text-orange')
             return
 
         with ui.pyplot(figsize=(14, 4.5), close=False).classes('w-full'):
@@ -209,17 +210,13 @@ def _coerce_int(value: Any) -> int | None:
         return int(value)
     try:
         text = str(value).strip()
-        if not text:
-            return None
-        return int(float(text))
+        return int(float(text)) if text else None
     except (TypeError, ValueError):
         return None
 
 
 def _dte_from_exp_key(exp_key: str) -> int | None:
-    if ':' not in exp_key:
-        return None
-    return _coerce_int(exp_key.rsplit(':', 1)[-1])
+    return None if ':' not in exp_key else _coerce_int(exp_key.rsplit(':', 1)[-1])
 
 
 def _extract_chain_dte_values(chain: dict[str, Any]) -> list[int]:
@@ -1323,7 +1320,7 @@ with ui.tabs().classes('w-full') as tabs:
     income_tab = ui.tab('Income')
     analysis_tab = ui.tab('Analysis')
 
-with ui.tab_panels(tabs, value=portfolio_tab).classes('w-full'):
+with ui.tab_panels(tabs, value=dashboard_tab).classes('w-full'):
     with ui.tab_panel(dashboard_tab):
         with ui.card().classes('w-full'):
             ui.label('Dashboard').classes('text-xl font-semibold')
