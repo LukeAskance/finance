@@ -10,8 +10,9 @@ from contextlib import suppress
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
+import yfinance as yf
 from dotenv import load_dotenv
-from nicegui import ui
+from nicegui import app, ui
 
 import historicals_store
 import options
@@ -678,6 +679,24 @@ def quote_number(quote_data: dict[str, Any], *keys: str) -> str:
             return f'{value}'
     return '-'
 
+async def fetch_market_indicators() -> None:
+    def _fetch():
+        results = {}
+        for ticker, key in [('^VIX', 'vix'), ('^GSPC', 'sp500')]:
+            try:
+                info = yf.Ticker(ticker).info
+                results[key] = info.get('regularMarketPrice')
+            except Exception:
+                results[key] = None
+        return results
+
+    data = await asyncio.get_event_loop().run_in_executor(None, _fetch)
+    vix_val = data.get('vix')
+    sp500_val = data.get('sp500')
+    vix_label.set_text(f'{vix_val:.2f}' if vix_val else '—')
+    sp500_label.set_text(f'{sp500_val:,.2f}' if sp500_val else '—')
+
+
 async def refresh_analysis_snapshot_click() -> None:
     analysis_refresh_button.disable()
     analysis_refresh_button.text = 'Rebuilding...'
@@ -838,6 +857,7 @@ async def refresh_portfolio_snapshot_click() -> None:
             f'Refreshed shared snapshot: {len(positions)} positions',
             color='positive',
         )
+        await fetch_market_indicators()
     except Exception as exc:
         portfolio_snapshot_status_value.text = f'Refresh failed: {exc}'
         ui.notify(f'Portfolio snapshot refresh failed: {exc}', color='negative')
@@ -1324,6 +1344,11 @@ with ui.tab_panels(tabs, value=dashboard_tab).classes('w-full'):
     with ui.tab_panel(dashboard_tab):
         with ui.card().classes('w-full'):
             ui.label('Dashboard').classes('text-xl font-semibold')
+            with ui.row().classes('items-center gap-4'):
+                ui.label('VIX:').classes('font-semibold')
+                vix_label = ui.label('…').classes('text-lg')
+                ui.label('S&P 500:').classes('font-semibold ml-4')
+                sp500_label = ui.label('…').classes('text-lg')
             with ui.row().classes('items-center gap-3'):
                 refresh_portfolio_snapshot_button = ui.button(
                     'Refresh Portfolio Snapshot',
