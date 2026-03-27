@@ -453,6 +453,12 @@ def _underlying_symbol(value: Any) -> str:
     return str(getattr(value, 'symbol', value))
 
 
+def _pe_ratio_for_row(p: Any) -> Any:
+    if p.position_type in {'CALL', 'PUT', 'OPTION', 'Cash'}:
+        return '--'
+    return round(float(p.pe_ratio), 2) if p.pe_ratio else '--'
+
+
 def _build_portfolio_rows_from_positions(positions: list[Any]) -> list[dict[str, Any]]:
     rows = [
         {
@@ -464,6 +470,7 @@ def _build_portfolio_rows_from_positions(positions: list[Any]) -> list[dict[str,
             'last': round(float(p.last_price), 4),
             'market_value': round(float(p.market_value), 2),
             'pl': round(float(p.pl_total), 2),
+            'pe_ratio': _pe_ratio_for_row(p),
         }
         for p in positions
     ]
@@ -591,6 +598,7 @@ def fetch_portfolio_rows() -> list[dict[str, Any]]:
             'last': round(float(p.last_price), 4),
             'market_value': round(float(p.market_value), 2),
             'pl': round(float(p.pl_total), 2),
+            'pe_ratio': _pe_ratio_for_row(p),
         }
         for p in positions
     ]
@@ -631,6 +639,7 @@ def aggregate_rows_by_symbol(
                 'last': 0.0,
                 'market_value': 0.0,
                 'pl': 0.0,
+                'pe_ratio': row.get('pe_ratio', '--'),
             }
 
         grouped[symbol]['quantity'] += float(row.get('quantity', 0.0))
@@ -653,7 +662,6 @@ def aggregate_rows_by_symbol(
 
 
 def set_quote_summary(
-    symbol: str,
     last: str = '-',
     bid: str = '-',
     ask: str = '-',
@@ -662,7 +670,6 @@ def set_quote_summary(
     low: str = '-',
     close: str = '-',
 ):
-    symbol_value.text = symbol
     last_value.text = last
     bid_value.text = bid
     ask_value.text = ask
@@ -726,21 +733,12 @@ async def get_quote_click():
         ui.notify('Enter a ticker symbol first', color='warning')
         return
 
-    set_quote_summary(
-        symbol.upper(),
-        'Loading...',
-        '-',
-        '-',
-        '-',
-        '-',
-        '-',
-        '-',
-    )
+    set_quote_summary('Loading...')
     quote_output.value = 'Loading...'
     try:
         result = await asyncio.to_thread(fetch_quote, symbol)
         if not result:
-            set_quote_summary(symbol.upper())
+            set_quote_summary()
             quote_output.value = f'No quote returned for {symbol.upper()}'
             return
 
@@ -748,7 +746,6 @@ async def get_quote_click():
         quote_data = result.get(symbol_key, {}).get('quote', {})
 
         set_quote_summary(
-            symbol_key,
             quote_number(quote_data, 'lastPrice', 'mark'),
             quote_number(quote_data, 'bidPrice', 'bid'),
             quote_number(quote_data, 'askPrice', 'ask'),
@@ -759,7 +756,7 @@ async def get_quote_click():
         )
         quote_output.value = json.dumps(result, indent=2)
     except Exception as exc:
-        set_quote_summary(symbol.upper())
+        set_quote_summary()
         quote_output.value = f'Quote error: {exc}'
 
 
@@ -1361,7 +1358,7 @@ with ui.tab_panels(tabs, value=dashboard_tab).classes('w-full'):
 
     with ui.tab_panel(portfolio_tab):
         with ui.row().classes('w-full items-start gap-4 no-wrap'):
-            with ui.column().classes('w-1/3 min-w-[360px]'):
+            with ui.column().classes('w-1/5 min-w-[220px]'):
                 with ui.card().classes('w-full'):
                     ui.label('Schwab Quote').classes('text-xl font-semibold')
                     symbol_input = ui.input('Symbol').props(
@@ -1370,8 +1367,6 @@ with ui.tab_panels(tabs, value=dashboard_tab).classes('w-full'):
                     ui.button('Get Quote', on_click=get_quote_click)
 
                     with ui.row():
-                        ui.label('Symbol:')
-                        symbol_value = ui.label('-').classes('font-semibold')
                         ui.label('Last:')
                         last_value = ui.label('-').classes('font-semibold')
                         ui.label('Bid:')
@@ -1458,6 +1453,13 @@ with ui.tab_panels(tabs, value=dashboard_tab).classes('w-full'):
                             'name': 'pl',
                             'label': 'P/L',
                             'field': 'pl',
+                            'sortable': True,
+                            'align': 'right',
+                        },
+                        {
+                            'name': 'pe_ratio',
+                            'label': 'P/E',
+                            'field': 'pe_ratio',
                             'sortable': True,
                             'align': 'right',
                         },
