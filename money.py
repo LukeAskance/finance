@@ -492,16 +492,21 @@ def _pe_ratio_for_row(p: Any) -> Any:
 def _build_portfolio_rows_from_positions(
     positions: list[Any],
 ) -> list[dict[str, Any]]:
+    def _pct_pl(pl: float, market_value: float) -> float:
+        cost_basis = market_value - pl
+        return round((pl / cost_basis) * 100, 2) if cost_basis != 0 else 0.0
+
     rows = [
         {
             "symbol": p.symbol,
-            "type": p.position_type,
+            "type": "CEF/ETF" if p.position_type == "COLLECTIVE_INVESTMENT" else p.position_type,
             "account": p.account_name,
             "underlying": _underlying_symbol(p.underlying),
             "quantity": round(float(p.quantity), 4),
             "last": round(float(p.last_price), 4),
             "market_value": round(float(p.market_value), 2),
             "pl": round(float(p.pl_total), 2),
+            "pct_pl": _pct_pl(float(p.pl_total), float(p.market_value)),
             "pe_ratio": _pe_ratio_for_row(p),
         }
         for p in positions
@@ -618,16 +623,21 @@ def fetch_portfolio_rows() -> list[dict[str, Any]]:
             return value
         return str(getattr(value, "symbol", value))
 
+    def _pct_pl(pl: float, market_value: float) -> float:
+        cost_basis = market_value - pl
+        return round((pl / cost_basis) * 100, 2) if cost_basis != 0 else 0.0
+
     rows = [
         {
             "symbol": p.symbol,
-            "type": p.position_type,
+            "type": "CEF/ETF" if p.position_type == "COLLECTIVE_INVESTMENT" else p.position_type,
             "account": p.account_name,
             "underlying": _underlying_symbol(p.underlying),
             "quantity": round(float(p.quantity), 4),
             "last": round(float(p.last_price), 4),
             "market_value": round(float(p.market_value), 2),
             "pl": round(float(p.pl_total), 2),
+            "pct_pl": _pct_pl(float(p.pl_total), float(p.market_value)),
             "pe_ratio": _pe_ratio_for_row(p),
         }
         for p in positions
@@ -683,6 +693,10 @@ def aggregate_rows_by_symbol(
         row["market_value"] = round(float(row["market_value"]), 2)
         row["pl"] = round(float(row["pl"]), 2)
         row["last"] = round(float(row["last"]), 4)
+        pl = float(row["pl"])
+        mv = float(row["market_value"])
+        cost_basis = mv - pl
+        row["pct_pl"] = round((pl / cost_basis) * 100, 2) if cost_basis != 0 else 0.0
 
     aggregated.sort(
         key=lambda row: float(row.get("market_value", 0.0)),
@@ -859,14 +873,6 @@ def on_chain_dte_change(_: Any = None) -> None:
         chain_dte_value_label.text = "Enter a valid integer DTE"
         return
 
-    """
-    if chain_dte_min is not None and chain_dte_max is not None:
-        if value < chain_dte_min or value > chain_dte_max:
-            chain_dte_value_label.text = (
-                f"Enter {chain_dte_min}..{chain_dte_max}"
-            )
-            return
-    """
     if chain_dte_min is not None and chain_dte_max is not None\
             and (value < chain_dte_min or value > chain_dte_max):
         chain_dte_value_label.text = (
@@ -1135,7 +1141,7 @@ def _build_symbol_dividend_payload(
             f"{_dividend_prediction_import_error}"
         )
 
-    forecaster = DividendForecaster.from_yfinance(symbol, shares=shares)
+    forecaster = DividendForecaster.from_edgar(symbol, shares=shares)
     result = forecaster.project(years=forecast_years)
 
     history_series = forecaster._raw.sort_index()
@@ -1450,18 +1456,21 @@ with ui.tab_panels(tabs, value=dashboard_tab).classes("w-full"):
                             "label": "Type",
                             "field": "type",
                             "sortable": True,
+                            "style": "width: 7ch; max-width: 7ch;",
                         },
                         {
                             "name": "account",
                             "label": "Account",
                             "field": "account",
                             "sortable": True,
+                            "style": "width: 9ch; max-width: 9ch;",
                         },
                         {
                             "name": "underlying",
                             "label": "Underlying",
                             "field": "underlying",
                             "sortable": True,
+                            "style": "width: 9ch; max-width: 9ch;",
                         },
                         {
                             "name": "quantity",
@@ -1469,6 +1478,7 @@ with ui.tab_panels(tabs, value=dashboard_tab).classes("w-full"):
                             "field": "quantity",
                             "sortable": True,
                             "align": "right",
+                            "style": "width: 8ch; max-width: 8ch;",
                         },
                         {
                             "name": "last",
@@ -1476,13 +1486,15 @@ with ui.tab_panels(tabs, value=dashboard_tab).classes("w-full"):
                             "field": "last",
                             "sortable": True,
                             "align": "right",
+                            "style": "width: 8ch; max-width: 8ch;",
                         },
                         {
                             "name": "market_value",
-                            "label": "Mkt Value",
+                            "label": "Mkt Val",
                             "field": "market_value",
                             "sortable": True,
                             "align": "right",
+                            "style": "width: 9ch; max-width: 9ch;",
                         },
                         {
                             "name": "pl",
@@ -1490,6 +1502,15 @@ with ui.tab_panels(tabs, value=dashboard_tab).classes("w-full"):
                             "field": "pl",
                             "sortable": True,
                             "align": "right",
+                            "style": "width: 8ch; max-width: 8ch;",
+                        },
+                        {
+                            "name": "pct_pl",
+                            "label": "%P/L",
+                            "field": "pct_pl",
+                            "sortable": True,
+                            "align": "right",
+                            "style": "width: 7ch; max-width: 7ch;",
                         },
                         {
                             "name": "pe_ratio",
@@ -1497,6 +1518,7 @@ with ui.tab_panels(tabs, value=dashboard_tab).classes("w-full"):
                             "field": "pe_ratio",
                             "sortable": True,
                             "align": "right",
+                            "style": "width: 6ch; max-width: 6ch;",
                         },
                     ]
                     with ui.element("div").classes(
@@ -1812,15 +1834,6 @@ with ui.tab_panels(tabs, value=dashboard_tab).classes("w-full"):
                 )
                 with ui.row().classes("items-center gap-3 w-full"):
                     ui.label("Accounts:").classes("text-sm font-semibold")
-                    """
-                    income_account_checkboxes: dict[str, Any] = {}
-                    for account_name in INCOME_ACCOUNT_NAMES:
-                        income_account_checkboxes[account_name] = ui.checkbox(
-                            account_name,
-                            value=True,
-                            on_change=on_income_account_change,
-                        )
-                    """
                     income_account_checkboxes: dict[str, Any] = {
                         account_name: ui.checkbox(
                              account_name,

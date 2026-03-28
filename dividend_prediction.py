@@ -4,14 +4,14 @@ dividend_forecast.py
 Predict future dividend income from historical data.
 
 Sources supported:
-  - yfinance (auto-fetch by ticker)
+  - SEC EDGAR XBRL company facts API (auto-fetch by ticker)
   - Schwab transaction history CSV export
 
 Usage:
     from dividend_forecast import DividendForecaster
 
-    # From yfinance
-    f = DividendForecaster.from_yfinance("AAPL")
+    # From SEC EDGAR
+    f = DividendForecaster.from_edgar("AAPL")
 
     # From Schwab CSV
     f = DividendForecaster.from_schwab_csv("schwab_transactions.csv", ticker="AAPL")
@@ -26,11 +26,14 @@ Usage:
 
 from __future__ import annotations
 
+import re
 import warnings
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Optional
+
+import requests
 
 import numpy as np
 import pandas as pd
@@ -126,21 +129,15 @@ class DividendForecaster:
     # ------------------------------------------------------------------
 
     @classmethod
-    def from_yfinance(
+    def from_edgar(
         cls,
         ticker: str,
         shares: float = 1.0,
     ) -> "DividendForecaster":
-        """Fetch dividend history from yfinance."""
-        try:
-            import yfinance as yf
-        except ImportError:
-            raise ImportError("Install yfinance:  pip install yfinance")
-
-        tk = yf.Ticker(ticker)
-        divs = tk.dividends
+        """Fetch dividend-per-share history from SEC EDGAR XBRL company facts."""
+        divs = _fetch_edgar_dividends(ticker)
         if divs.empty:
-            raise ValueError(f"No dividend history found for {ticker} via yfinance.")
+            raise ValueError(f"No dividend history found for {ticker} via SEC EDGAR.")
         return cls(ticker, divs, shares=shares)
 
     @classmethod
@@ -174,27 +171,26 @@ class DividendForecaster:
         prefer: str = "schwab",
     ) -> "DividendForecaster":
         """
-        Merge yfinance + Schwab history. Deduplicates on date (within 5 days).
+        Merge SEC EDGAR + Schwab history. Deduplicates on date (within 5 days).
 
         Parameters
         ----------
-        prefer : 'schwab' | 'yfinance'
+        prefer : 'schwab' | 'edgar'
             Which source wins when the same payment date appears in both.
         """
         try:
-            import yfinance as yf
-            yf_divs = yf.Ticker(ticker).dividends
+            edgar_divs = _fetch_edgar_dividends(ticker)
         except Exception as e:
-            warnings.warn(f"yfinance fetch failed ({e}); using Schwab only.")
-            yf_divs = pd.Series(dtype=float)
+            warnings.warn(f"EDGAR fetch failed ({e}); using Schwab only.")
+            edgar_divs = pd.Series(dtype=float)
 
         try:
             sw_divs = _parse_schwab_csv(schwab_csv, ticker)
         except Exception as e:
-            warnings.warn(f"Schwab CSV parse failed ({e}); using yfinance only.")
+            warnings.warn(f"Schwab CSV parse failed ({e}); using EDGAR only.")
             sw_divs = pd.Series(dtype=float)
 
-        merged = _merge_dividend_series(yf_divs, sw_divs, prefer=prefer)
+        merged = _merge_dividend_series(edgar_divs, sw_divs, prefer=prefer)
         if merged.empty:
             raise ValueError("No dividend data found from either source.")
         return cls(ticker, merged, shares=shares)
@@ -307,6 +303,86 @@ class DividendForecaster:
             s.index = s.index.tz_localize(None)
         s.index = pd.to_datetime(s.index)
         return s.sort_index()
+
+
+# ---------------------------------------------------------------------------
+# SEC EDGAR helpers
+# ---------------------------------------------------------------------------
+
+_EDGAR_HEADERS = {"User-Agent": "money-app contact@example.com"}
+_EDGAR_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
+_EDGAR_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
+_EDGAR_TIMEOUT = 15  # seconds
+
+
+def _ticker_to_cik(ticker: str) -> str:
+    """Resolve a ticker symbol to a zero-padded 10-digit SEC CIK string."""
+    r = requests.get(_EDGAR_TICKERS_URL, headers=_EDGAR_HEADERS, timeout=_EDGAR_TIMEOUT)
+    r.raise_for_status()
+    upper = ticker.upper()
+    for entry in r.json().values():
+        if entry["ticker"].upper() == upper:
+            return str(entry["cik_str"]).zfill(10)
+    raise ValueError(f"Could not find SEC CIK for ticker {ticker!r}")
+
+
+def _edgar_entries_to_series(entries: list[dict]) -> pd.Series:
+    """
+    Convert EDGAR XBRL fact entries to a deduplicated per-share dividend Series.
+
+    Prefers entries that carry a quarterly frame tag (CY????Q?); falls back to
+    deduplicating by accession number when no framed entries exist.
+    """
+    quarterly = [e for e in entries if re.match(r"CY\d{4}Q\d$", e.get("frame", ""))]
+    source = quarterly or entries
+
+    seen: set[tuple] = set()
+    records: list[tuple[str, float]] = []
+    for e in source:
+        key = (e["end"], e["val"]) if quarterly else (e.get("accn", e["end"]), e["val"])
+        if key not in seen:
+            seen.add(key)
+            records.append((e["end"], float(e["val"])))
+
+    if not records:
+        return pd.Series(dtype=float)
+
+    s = pd.Series(
+        [v for _, v in records],
+        index=pd.to_datetime([d for d, _ in records]),
+    )
+    return s[s > 0].sort_index()
+
+
+def _fetch_edgar_dividends(ticker: str) -> pd.Series:
+    """
+    Fetch dividend-per-share history for *ticker* from SEC EDGAR XBRL facts.
+
+    Tries CommonStockDividendsPerShareDeclared first, then falls back to
+    CommonStockDividendsPerShareCashPaid.
+    """
+    cik = _ticker_to_cik(ticker)
+    url = _EDGAR_FACTS_URL.format(cik=cik)
+    r = requests.get(url, headers=_EDGAR_HEADERS, timeout=_EDGAR_TIMEOUT)
+    r.raise_for_status()
+
+    us_gaap = r.json().get("facts", {}).get("us-gaap", {})
+    for concept in (
+        # Common stock dividends per share
+        "CommonStockDividendsPerShareDeclared",
+        "CommonStockDividendsPerShareCashPaid",
+        # MLP / limited-partnership distributions per unit
+        "DistributionMadeToLimitedPartnerDistributionsDeclaredPerUnit",
+        "DistributionMadeToLimitedPartnerCashDistributionsPerUnit",
+        "DistributionMadeToMemberOrLimitedPartnerDistributionsDeclaredPerUnit",
+    ):
+        entries = us_gaap.get(concept, {}).get("units", {}).get("USD/shares", [])
+        if entries:
+            series = _edgar_entries_to_series(entries)
+            if not series.empty:
+                return series
+
+    return pd.Series(dtype=float)
 
 
 # ---------------------------------------------------------------------------
@@ -463,8 +539,8 @@ if __name__ == "__main__":
     ticker = sys.argv[1] if len(sys.argv) > 1 else "AAPL"
     shares = float(sys.argv[2]) if len(sys.argv) > 2 else 100.0
 
-    print(f"Fetching dividend history for {ticker} via yfinance...")
-    forecaster = DividendForecaster.from_yfinance(ticker, shares=shares)
+    print(f"Fetching dividend history for {ticker} via SEC EDGAR...")
+    forecaster = DividendForecaster.from_edgar(ticker, shares=shares)
     result = forecaster.project(years=5)
     print(result.summary())
 

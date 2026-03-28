@@ -27,6 +27,7 @@ httptools==0.7.1
 httpx==0.28.1
 idna==3.11
 ifaddr==0.2.0
+iniconfig==2.3.0
 isort==8.0.1
 itsdangerous==2.2.0
 Jinja2==3.1.6
@@ -44,10 +45,12 @@ numpy==2.4.2
 orjson==3.11.7
 packaging==26.0
 pandas==2.3.3
+pandas-stubs==3.0.0.260204
 peewee==4.0.1
 pillow==12.1.1
 platformdirs==4.9.2
 plotly==6.6.0
+pluggy==1.6.0
 propcache==0.4.1
 protobuf==7.34.0
 pycparser==3.0
@@ -56,6 +59,7 @@ pydantic_core==2.41.5
 pyfredapi==0.10.2
 Pygments==2.19.2
 pyparsing==3.3.2
+pytest==9.0.2
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.2
 python-edgar==3.1.3
