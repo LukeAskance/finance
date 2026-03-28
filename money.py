@@ -12,7 +12,7 @@ from typing import Any
 
 import yfinance as yf
 from dotenv import load_dotenv
-from nicegui import app, ui
+from nicegui import ui
 
 import historicals_store
 import options
@@ -24,6 +24,7 @@ from schwab_api import SchwabAPI
 
 try:
     from dividend_prediction import DividendForecaster
+
     _dividend_prediction_import_error = None
 except ImportError as exc:
     DividendForecaster = None
@@ -31,6 +32,7 @@ except ImportError as exc:
 
 try:
     from schwabdev.client import Client as _SchwabClient
+
     _schwab_import_error = None
 except ImportError as exc:
     _SchwabClient = None
@@ -39,12 +41,13 @@ except ImportError as exc:
 SchwabClient: Any = _SchwabClient
 
 load_dotenv()
-historicals_store.init_db('/Users/george/code/money/portfolio.db')
+historicals_store.init_db("/Users/george/code/money/portfolio.db")
 
 dark_mode = ui.dark_mode()
 dark_mode.enable()
 
-ui.add_head_html('''
+ui.add_head_html(
+    """
 <style>
 .portfolio-table-wrap .q-table__middle {
     max-height: 75vh;
@@ -58,26 +61,25 @@ ui.add_head_html('''
     background: var(--q-dark-page);
 }
 </style>
-''')
+"""
+)
 
 
 def getClient():
     if SchwabClient is None:
-        raise RuntimeError(
-            f'schwabdev import failed: {_schwab_import_error}'
-        )
+        raise RuntimeError(f"schwabdev import failed: {_schwab_import_error}")
 
     return SchwabClient(
-        os.getenv('SCHWAB_APP_KEY'),
-        os.getenv('SCHWAB_SECRET'),
-        os.getenv('callback_url'),
-        os.getenv('token_filename'),
+        os.getenv("SCHWAB_APP_KEY"),
+        os.getenv("SCHWAB_SECRET"),
+        os.getenv("callback_url"),
+        os.getenv("token_filename"),
     )
 
 
 def generate_report():
     time.sleep(2)
-    return 'Report generated successfully'
+    return "Report generated successfully"
 
 
 def run_report():
@@ -87,7 +89,7 @@ def run_report():
 
 def run_task(script: str):
     subprocess.run([sys.executable, script])
-    ui.notify(f'{script} finished')
+    ui.notify(f"{script} finished")
 
 
 def _render_historicals_plot(
@@ -97,17 +99,16 @@ def _render_historicals_plot(
     historicals_plot_host.clear()
     with historicals_plot_host:
         if not symbol_series:
-            ui.label('No historical data found for the selected '
-                     'symbols.').classes(
-                'text-sm text-orange'
-            )
+            ui.label(
+                "No historical data found for the selected " "symbols."
+            ).classes("text-sm text-orange")
             return
 
-        with ui.pyplot(figsize=(16, 7), close=False).classes('w-full'):
+        with ui.pyplot(figsize=(16, 7), close=False).classes("w-full"):
             utilities.draw_historicals_series(
                 symbol_series,
                 normalize=normalize,
-                title='Historical Stock Prices',
+                title="Historical Stock Prices",
             )
 
 
@@ -117,63 +118,72 @@ def _render_portfolio_totals_plot(rows: list[dict[str, Any]]) -> None:
     historicals_totals_plot_host.clear()
     with historicals_totals_plot_host:
         if not rows:
-            ui.label('No portfolio totals yet. '
-                     'Capture a daily snapshot.').classes('text-sm text-orange')
+            ui.label(
+                "No portfolio totals yet. " "Capture a daily snapshot."
+            ).classes("text-sm text-orange")
             return
 
-        xs = [r['date'] for r in rows]
-        ys = [float(r['total_market_value']) for r in rows]
-        fig = go.Figure(go.Scatter(
-            x=xs,
-            y=ys,
-            mode='lines+markers',
-            line={'width': 2},
-            hovertemplate='%{x}<br>$%{y:,.2f}<extra></extra>',
-        ))
-        fig.update_layout(
-            title='Portfolio Total Over Time',
-            xaxis_title='UTC Date',
-            yaxis_title='Portfolio Total ($)',
-            yaxis_tickformat='$,.0f',
-            hovermode='x unified',
-            margin={'l': 60, 'r': 20, 't': 40, 'b': 40},
+        xs = [r["date"] for r in rows]
+        ys = [float(r["total_market_value"]) for r in rows]
+        fig = go.Figure(
+            go.Scatter(
+                x=xs,
+                y=ys,
+                mode="lines+markers",
+                line={"width": 2},
+                hovertemplate="%{x}<br>$%{y:,.2f}<extra></extra>",
+            )
         )
-        ui.plotly(fig).classes('w-full')
+        fig.update_layout(
+            title="Portfolio Total Over Time",
+            xaxis_title="UTC Date",
+            yaxis_title="Portfolio Total ($)",
+            yaxis_tickformat="$,.0f",
+            hovermode="x unified",
+            margin={"l": 60, "r": 20, "t": 40, "b": 40},
+        )
+        ui.plotly(fig).classes("w-full")
 
 
-def _render_account_totals_plot(series: dict[str, list[tuple[str, float]]]) -> None:
+def _render_account_totals_plot(
+    series: dict[str, list[tuple[str, float]]]
+) -> None:
     import plotly.graph_objects as go
 
     historicals_accounts_plot_host.clear()
     with historicals_accounts_plot_host:
         if not series:
-            ui.label('No account totals yet.').classes('text-sm text-orange')
+            ui.label("No account totals yet.").classes("text-sm text-orange")
             return
 
         fig = go.Figure()
         for account, points in series.items():
             xs = [d for d, _ in points]
             ys = [float(v) for _, v in points]
-            fig.add_trace(go.Scatter(
-                x=xs,
-                y=ys,
-                mode='lines+markers',
-                name=account,
-                hovertemplate=f'{account}<br>%{{x}}<br>$%{{y:,.2f}}<extra></extra>',
-            ))
+            fig.add_trace(
+                go.Scatter(
+                    x=xs,
+                    y=ys,
+                    mode="lines+markers",
+                    name=account,
+                    hovertemplate=f"{account}<br>%{{x}}"
+                                  f"<br>$%{{y:,.2f}}<extra></extra>",
+                )
+            )
         fig.update_layout(
-            title='Account Totals Over Time',
-            xaxis_title='UTC Date',
-            yaxis_title='Account Total ($)',
-            yaxis_tickformat='$,.0f',
-            hovermode='x unified',
-            margin={'l': 60, 'r': 20, 't': 40, 'b': 40},
+            title="Account Totals Over Time",
+            xaxis_title="UTC Date",
+            yaxis_title="Account Total ($)",
+            yaxis_tickformat="$,.0f",
+            hovermode="x unified",
+            margin={"l": 60, "r": 20, "t": 40, "b": 40},
         )
-        ui.plotly(fig).classes('w-full')
+        ui.plotly(fig).classes("w-full")
 
 
 api: SchwabAPI | None = None
 original_portfolio_rows: list[dict[str, Any]] = []
+is_aggregated: bool = False
 portfolio_snapshot_positions: list[Any] = []
 portfolio_snapshot_rows: list[dict[str, Any]] = []
 portfolio_snapshot_as_of: datetime | None = None
@@ -186,19 +196,19 @@ chain_step_index: int = 0
 filtered_chain_data: dict[str, Any] | None = None
 analysis_engine = PortfolioAnalysisEngine()
 analysis_default_models = {
-    'claude': 'claude-sonnet-4-20250514',
-    'perplexity': 'sonar',
+    "claude": "claude-sonnet-4-20250514",
+    "perplexity": "sonar",
 }
 
-EQUITY_INCOME_TYPES = {'EQUITY', 'MUTUAL_FUND', 'COLLECTIVE_INVESTMENT'}
+EQUITY_INCOME_TYPES = {"EQUITY", "MUTUAL_FUND", "COLLECTIVE_INVESTMENT"}
 INCOME_ACCOUNT_NAMES = [
-    'GeorgeTrust',
-    'DebRoth',
-    'Investments',
-    'DebTrust',
-    'GrandKids',
-    'GeorgeRoth',
-    'FidelityRoth',
+    "GeorgeTrust",
+    "DebRoth",
+    "Investments",
+    "DebTrust",
+    "GrandKids",
+    "GeorgeRoth",
+    "FidelityRoth",
 ]
 
 
@@ -236,19 +246,21 @@ def _coerce_int(value: Any) -> int | None:
 
 
 def _dte_from_exp_key(exp_key: str) -> int | None:
-    return None if ':' not in exp_key else _coerce_int(exp_key.rsplit(':', 1)[-1])
+    return (
+        None if ":" not in exp_key else _coerce_int(exp_key.rsplit(":", 1)[-1])
+    )
 
 
 def _extract_chain_dte_values(chain: dict[str, Any]) -> list[int]:
     dte_values: list[int] = []
-    for map_name in ('callExpDateMap', 'putExpDateMap'):
+    for map_name in ("callExpDateMap", "putExpDateMap"):
         exp_map = chain.get(map_name, {}) or {}
         for exp_key, strikes in exp_map.items():
             if (exp_key_dte := _dte_from_exp_key(exp_key)) is not None:
                 dte_values.append(exp_key_dte)
             for _, contracts in (strikes or {}).items():
                 for contract in contracts or []:
-                    dte = _coerce_int(contract.get('daysToExpiration'))
+                    dte = _coerce_int(contract.get("daysToExpiration"))
                     if dte is not None:
                         dte_values.append(dte)
     return dte_values
@@ -261,10 +273,10 @@ def _filter_chain_by_dte(
     filtered: dict[str, Any] = {
         key: value
         for key, value in chain.items()
-        if key not in {'callExpDateMap', 'putExpDateMap'}
+        if key not in {"callExpDateMap", "putExpDateMap"}
     }
 
-    for map_name in ('callExpDateMap', 'putExpDateMap'):
+    for map_name in ("callExpDateMap", "putExpDateMap"):
         exp_map = chain.get(map_name, {}) or {}
         new_exp_map: dict[str, Any] = {}
         for exp_key, strikes in exp_map.items():
@@ -276,7 +288,7 @@ def _filter_chain_by_dte(
                     for contract in (contracts or [])
                     if (
                         (
-                            dte := _coerce_int(contract.get('daysToExpiration'))
+                            dte := _coerce_int(contract.get("daysToExpiration"))
                             or exp_key_dte
                         )
                         is not None
@@ -294,8 +306,8 @@ def _filter_chain_by_dte(
 
 def _price_text(value: Any) -> str:
     if isinstance(value, (int, float)):
-        return f'{float(value):.2f}'
-    return '-' if value is None else str(value)
+        return f"{float(value):.2f}"
+    return "-" if value is None else str(value)
 
 
 def _coerce_float(value: Any) -> float | None:
@@ -312,10 +324,10 @@ def _coerce_float(value: Any) -> float | None:
 
 def _extract_step_contracts(chain: dict[str, Any]) -> list[dict[str, Any]]:
     contracts: list[dict[str, Any]] = []
-    underlying = chain.get('underlying', {}) or {}
+    underlying = chain.get("underlying", {}) or {}
     underlying_price: float | None = None
     if isinstance(underlying, dict):
-        underlying_last = underlying.get('last')
+        underlying_last = underlying.get("last")
         if isinstance(underlying_last, (int, float)):
             underlying_price = float(underlying_last)
         else:
@@ -330,8 +342,8 @@ def _extract_step_contracts(chain: dict[str, Any]) -> list[dict[str, Any]]:
     show_otm = bool(chain_step_otm_checkbox.value)
 
     def _matches_moneyness(contract: dict[str, Any]) -> bool:
-        in_the_money = bool(contract.get('inTheMoney'))
-        strike_value = contract.get('strikePrice')
+        in_the_money = bool(contract.get("inTheMoney"))
+        strike_value = contract.get("strikePrice")
         strike = None
         if isinstance(strike_value, (int, float)):
             strike = float(strike_value)
@@ -350,7 +362,7 @@ def _extract_step_contracts(chain: dict[str, Any]) -> list[dict[str, Any]]:
             return True
         return True if show_otm and not in_the_money else show_ntm and is_ntm
 
-    for map_name in ('callExpDateMap', 'putExpDateMap'):
+    for map_name in ("callExpDateMap", "putExpDateMap"):
         exp_map = chain.get(map_name, {}) or {}
         for exp_key, strikes in exp_map.items():
             exp_key_dte = _dte_from_exp_key(exp_key)
@@ -358,41 +370,44 @@ def _extract_step_contracts(chain: dict[str, Any]) -> list[dict[str, Any]]:
                 for contract in contract_list or []:
                     if not _matches_moneyness(contract):
                         continue
-                    contract_dte = _coerce_int(
-                        contract.get('daysToExpiration')
+                    contract_dte = _coerce_int(contract.get("daysToExpiration"))
+                    dte = (
+                        contract_dte
+                        if contract_dte is not None
+                        else exp_key_dte
                     )
-                    dte = contract_dte if contract_dte is not None else exp_key_dte
                     if dte is None:
                         continue
                     contracts.append(
                         {
-                            'description': str(
-                                contract.get('description')
-                                or contract.get('symbol')
-                                or '-'
+                            "description": str(
+                                contract.get("description")
+                                or contract.get("symbol")
+                                or "-"
                             ),
-                            'bid': contract.get('bid') or contract.get('bidPrice'),
-                            'ask': contract.get('ask') or contract.get('askPrice'),
-                            'last': contract.get('last') or contract.get('lastPrice'),
-                            'mark': (
-                                contract.get('mark')
-                                or contract.get('markPrice')
-                                or contract.get('last')
-                                or contract.get('lastPrice')
+                            "bid": contract.get("bid")
+                            or contract.get("bidPrice"),
+                            "ask": contract.get("ask")
+                            or contract.get("askPrice"),
+                            "last": contract.get("last")
+                            or contract.get("lastPrice"),
+                            "mark": (
+                                contract.get("mark")
+                                or contract.get("markPrice")
+                                or contract.get("last")
+                                or contract.get("lastPrice")
                             ),
-                            'dte': dte,
-                            'symbol': str(contract.get('symbol') or ''),
-                            'inTheMoney': bool(
-                                contract.get('inTheMoney')
-                            ),
-                            'strikePrice': contract.get('strikePrice'),
+                            "dte": dte,
+                            "symbol": str(contract.get("symbol") or ""),
+                            "inTheMoney": bool(contract.get("inTheMoney")),
+                            "strikePrice": contract.get("strikePrice"),
                         }
                     )
 
     contracts.sort(
         key=lambda row: (
-            int(row.get('dte') or 0),
-            str(row.get('symbol') or ''),
+            int(row.get("dte") or 0),
+            str(row.get("symbol") or ""),
         )
     )
     return contracts
@@ -400,35 +415,35 @@ def _extract_step_contracts(chain: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _update_chain_step_display() -> None:
     if not chain_step_contracts:
-        chain_step_position_label.text = '0 / 0'
-        chain_step_description_value.text = '-'
-        chain_step_bid_value.text = '-'
-        chain_step_ask_value.text = '-'
-        chain_step_last_value.text = '-'
-        chain_step_mark_value.text = '-'
-        chain_step_dte_value.text = '-'
-        chain_step_premium_value.text = '-'
-        chain_step_annualized_value.text = '-'
+        chain_step_position_label.text = "0 / 0"
+        chain_step_description_value.text = "-"
+        chain_step_bid_value.text = "-"
+        chain_step_ask_value.text = "-"
+        chain_step_last_value.text = "-"
+        chain_step_mark_value.text = "-"
+        chain_step_dte_value.text = "-"
+        chain_step_premium_value.text = "-"
+        chain_step_annualized_value.text = "-"
         chain_step_up_button.disable()
         chain_step_down_button.disable()
         return
 
     contract = chain_step_contracts[chain_step_index]
     chain_step_position_label.text = (
-        f'{chain_step_index + 1} / {len(chain_step_contracts)}'
+        f"{chain_step_index + 1} / {len(chain_step_contracts)}"
     )
-    symbol = str(contract.get('symbol') or '-')
-    dte = _coerce_int(contract.get('dte'))
-    dte_text = str(dte) if dte is not None else '-'
+    symbol = str(contract.get("symbol") or "-")
+    dte = _coerce_int(contract.get("dte"))
+    dte_text = str(dte) if dte is not None else "-"
     chain_step_description_value.text = symbol
     chain_step_dte_value.text = dte_text
-    chain_step_bid_value.text = _price_text(contract.get('bid'))
-    chain_step_ask_value.text = _price_text(contract.get('ask'))
-    chain_step_last_value.text = _price_text(contract.get('last'))
-    chain_step_mark_value.text = _price_text(contract.get('mark'))
+    chain_step_bid_value.text = _price_text(contract.get("bid"))
+    chain_step_ask_value.text = _price_text(contract.get("ask"))
+    chain_step_last_value.text = _price_text(contract.get("last"))
+    chain_step_mark_value.text = _price_text(contract.get("mark"))
 
-    mark = _coerce_float(contract.get('mark'))
-    strike = _coerce_float(contract.get('strikePrice'))
+    mark = _coerce_float(contract.get("mark"))
+    strike = _coerce_float(contract.get("strikePrice"))
     premium_percent: float | None = None
     annualized_percent: float | None = None
     if mark is not None and strike and strike > 0:
@@ -437,14 +452,10 @@ def _update_chain_step_display() -> None:
         annualized_percent = premium_percent * (364.0 / dte)
 
     chain_step_premium_value.text = (
-        f'{premium_percent:.2f}%'
-        if premium_percent is not None
-        else '-'
+        f"{premium_percent:.2f}%" if premium_percent is not None else "-"
     )
     chain_step_annualized_value.text = (
-        f'{annualized_percent:.2f}%'
-        if annualized_percent is not None
-        else '-'
+        f"{annualized_percent:.2f}%" if annualized_percent is not None else "-"
     )
 
     if chain_step_index <= 0:
@@ -469,31 +480,33 @@ def _set_chain_step_contracts(chain: dict[str, Any]) -> None:
 def _underlying_symbol(value: Any) -> str:
     if isinstance(value, str):
         return value
-    return str(getattr(value, 'symbol', value))
+    return str(getattr(value, "symbol", value))
 
 
 def _pe_ratio_for_row(p: Any) -> Any:
-    if p.position_type in {'CALL', 'PUT', 'OPTION', 'Cash'}:
-        return '--'
-    return round(float(p.pe_ratio), 2) if p.pe_ratio else '--'
+    if p.position_type in {"CALL", "PUT", "OPTION", "Cash"}:
+        return "--"
+    return round(float(p.pe_ratio), 2) if p.pe_ratio else "--"
 
 
-def _build_portfolio_rows_from_positions(positions: list[Any]) -> list[dict[str, Any]]:
+def _build_portfolio_rows_from_positions(
+    positions: list[Any],
+) -> list[dict[str, Any]]:
     rows = [
         {
-            'symbol': p.symbol,
-            'type': p.position_type,
-            'account': p.account_name,
-            'underlying': _underlying_symbol(p.underlying),
-            'quantity': round(float(p.quantity), 4),
-            'last': round(float(p.last_price), 4),
-            'market_value': round(float(p.market_value), 2),
-            'pl': round(float(p.pl_total), 2),
-            'pe_ratio': _pe_ratio_for_row(p),
+            "symbol": p.symbol,
+            "type": p.position_type,
+            "account": p.account_name,
+            "underlying": _underlying_symbol(p.underlying),
+            "quantity": round(float(p.quantity), 4),
+            "last": round(float(p.last_price), 4),
+            "market_value": round(float(p.market_value), 2),
+            "pl": round(float(p.pl_total), 2),
+            "pe_ratio": _pe_ratio_for_row(p),
         }
         for p in positions
     ]
-    rows.sort(key=lambda r: float(r.get('market_value', 0.0)), reverse=True)
+    rows.sort(key=lambda r: float(r.get("market_value", 0.0)), reverse=True)
     return rows
 
 
@@ -554,19 +567,17 @@ async def _render_filtered_chain() -> None:
 
     if chain_dte_min is not None and dte_limit < chain_dte_min:
         chain_output.value = (
-            f'DTE must be >= {chain_dte_min} '
-            f'and <= {chain_dte_max}'
+            f"DTE must be >= {chain_dte_min} " f"and <= {chain_dte_max}"
         )
         return
 
     if chain_dte_max is not None and dte_limit > chain_dte_max:
         chain_output.value = (
-            f'DTE must be >= {chain_dte_min} '
-            f'and <= {chain_dte_max}'
+            f"DTE must be >= {chain_dte_min} " f"and <= {chain_dte_max}"
         )
         return
 
-    chain_dte_value_label.text = f'DTE <= {dte_limit}'
+    chain_dte_value_label.text = f"DTE <= {dte_limit}"
     filtered = await asyncio.to_thread(
         _filter_chain_by_dte,
         raw_chain_data,
@@ -594,7 +605,7 @@ def schedule_chain_render() -> None:
         except asyncio.CancelledError:
             return
         except Exception as exc:
-            chain_output.value = f'Chain render error: {exc}'
+            chain_output.value = f"Chain render error: {exc}"
 
     pending_chain_render_task = asyncio.create_task(_debounced_render())
 
@@ -605,25 +616,25 @@ def fetch_portfolio_rows() -> list[dict[str, Any]]:
     def _underlying_symbol(value: Any) -> str:
         if isinstance(value, str):
             return value
-        return str(getattr(value, 'symbol', value))
+        return str(getattr(value, "symbol", value))
 
     rows = [
         {
-            'symbol': p.symbol,
-            'type': p.position_type,
-            'account': p.account_name,
-            'underlying': _underlying_symbol(p.underlying),
-            'quantity': round(float(p.quantity), 4),
-            'last': round(float(p.last_price), 4),
-            'market_value': round(float(p.market_value), 2),
-            'pl': round(float(p.pl_total), 2),
-            'pe_ratio': _pe_ratio_for_row(p),
+            "symbol": p.symbol,
+            "type": p.position_type,
+            "account": p.account_name,
+            "underlying": _underlying_symbol(p.underlying),
+            "quantity": round(float(p.quantity), 4),
+            "last": round(float(p.last_price), 4),
+            "market_value": round(float(p.market_value), 2),
+            "pl": round(float(p.pl_total), 2),
+            "pe_ratio": _pe_ratio_for_row(p),
         }
         for p in positions
     ]
 
     def _market_value_for_sort(row: dict[str, Any]) -> float:
-        value = row.get('market_value', 0.0)
+        value = row.get("market_value", 0.0)
         if isinstance(value, (int, float, str)):
             try:
                 return float(value)
@@ -644,50 +655,50 @@ def aggregate_rows_by_symbol(
     grouped: dict[str, dict[str, Any]] = {}
 
     for row in rows:
-        symbol = str(row.get('symbol', '')).upper()
+        symbol = str(row.get("symbol", "")).upper()
         if not symbol:
             continue
 
         if symbol not in grouped:
             grouped[symbol] = {
-                'symbol': symbol,
-                'type': row.get('type', ''),
-                'account': 'Aggregated',
-                'underlying': row.get('underlying', symbol),
-                'quantity': 0.0,
-                'last': 0.0,
-                'market_value': 0.0,
-                'pl': 0.0,
-                'pe_ratio': row.get('pe_ratio', '--'),
+                "symbol": symbol,
+                "type": row.get("type", ""),
+                "account": "Aggregated",
+                "underlying": row.get("underlying", symbol),
+                "quantity": 0.0,
+                "last": 0.0,
+                "market_value": 0.0,
+                "pl": 0.0,
+                "pe_ratio": row.get("pe_ratio", "--"),
             }
 
-        grouped[symbol]['quantity'] += float(row.get('quantity', 0.0))
-        grouped[symbol]['market_value'] += float(row.get('market_value', 0.0))
-        grouped[symbol]['pl'] += float(row.get('pl', 0.0))
-        grouped[symbol]['last'] = float(row.get('last', 0.0))
+        grouped[symbol]["quantity"] += float(row.get("quantity", 0.0))
+        grouped[symbol]["market_value"] += float(row.get("market_value", 0.0))
+        grouped[symbol]["pl"] += float(row.get("pl", 0.0))
+        grouped[symbol]["last"] = float(row.get("last", 0.0))
 
     aggregated = list(grouped.values())
     for row in aggregated:
-        row['quantity'] = round(float(row['quantity']), 4)
-        row['market_value'] = round(float(row['market_value']), 2)
-        row['pl'] = round(float(row['pl']), 2)
-        row['last'] = round(float(row['last']), 4)
+        row["quantity"] = round(float(row["quantity"]), 4)
+        row["market_value"] = round(float(row["market_value"]), 2)
+        row["pl"] = round(float(row["pl"]), 2)
+        row["last"] = round(float(row["last"]), 4)
 
     aggregated.sort(
-        key=lambda row: float(row.get('market_value', 0.0)),
+        key=lambda row: float(row.get("market_value", 0.0)),
         reverse=True,
     )
     return aggregated
 
 
 def set_quote_summary(
-    last: str = '-',
-    bid: str = '-',
-    ask: str = '-',
-    open_price: str = '-',
-    high: str = '-',
-    low: str = '-',
-    close: str = '-',
+    last: str = "-",
+    bid: str = "-",
+    ask: str = "-",
+    open_price: str = "-",
+    high: str = "-",
+    low: str = "-",
+    close: str = "-",
 ):
     last_value.text = last
     bid_value.text = bid
@@ -702,92 +713,100 @@ def quote_number(quote_data: dict[str, Any], *keys: str) -> str:
     for key in keys:
         value = quote_data.get(key)
         if value is not None:
-            return f'{value}'
-    return '-'
+            return f"{value}"
+    return "-"
+
 
 async def fetch_market_indicators() -> None:
     def _fetch():
         results = {}
-        for ticker, key in [('^VIX', 'vix'), ('^GSPC', 'sp500')]:
+        for ticker, key in [("^VIX", "vix"), ("^GSPC", "sp500")]:
             try:
                 info = yf.Ticker(ticker).info
-                results[key] = info.get('regularMarketPrice')
+                results[key] = info.get("regularMarketPrice")
             except Exception:
                 results[key] = None
         return results
 
     data = await asyncio.get_event_loop().run_in_executor(None, _fetch)
-    vix_val = data.get('vix')
-    sp500_val = data.get('sp500')
-    vix_label.set_text(f'{vix_val:.2f}' if vix_val else '—')
-    sp500_label.set_text(f'{sp500_val:,.2f}' if sp500_val else '—')
+    vix_val = data.get("vix")
+    sp500_val = data.get("sp500")
+    vix_label.set_text(f"{vix_val:.2f}" if vix_val else "—")
+    sp500_label.set_text(f"{sp500_val:,.2f}" if sp500_val else "—")
 
 
 async def refresh_analysis_snapshot_click() -> None:
     analysis_refresh_button.disable()
-    analysis_refresh_button.text = 'Rebuilding...'
+    analysis_refresh_button.text = "Rebuilding..."
     try:
         positions, _ = await ensure_portfolio_snapshot(force_refresh=False)
         count = await asyncio.to_thread(
             analysis_engine.refresh_snapshot_from_positions,
             positions,
         )
-        as_of = analysis_engine.as_of.strftime('%Y-%m-%d %H:%M:%S') if analysis_engine.as_of else '-'
+        as_of = (
+            analysis_engine.as_of.strftime("%Y-%m-%d %H:%M:%S")
+            if analysis_engine.as_of
+            else "-"
+        )
         analysis_status_value.text = (
-            f'{count} aggregated positions loaded @ {as_of}'
+            f"{count} aggregated positions loaded @ {as_of}"
         )
         analysis_rows_table.rows = []
         analysis_rows_table.update()
-        analysis_answer.value = 'Analysis rebuilt from shared portfolio snapshot.'
+        analysis_answer.value = (
+            "Analysis rebuilt from shared portfolio snapshot."
+        )
     except Exception as exc:
-        analysis_answer.value = f'Analysis refresh error: {exc}'
+        analysis_answer.value = f"Analysis refresh error: {exc}"
     finally:
-        analysis_refresh_button.text = 'Rebuild Analysis'
+        analysis_refresh_button.text = "Rebuild Analysis"
         analysis_refresh_button.enable()
 
 
 async def get_quote_click():
     symbol = symbol_input.value.strip()
     if not symbol:
-        ui.notify('Enter a ticker symbol first', color='warning')
+        ui.notify("Enter a ticker symbol first", color="warning")
         return
 
-    set_quote_summary('Loading...')
-    quote_output.value = 'Loading...'
+    set_quote_summary("Loading...")
+    quote_output.value = "Loading..."
     try:
         result = await asyncio.to_thread(fetch_quote, symbol)
         if not result:
             set_quote_summary()
-            quote_output.value = f'No quote returned for {symbol.upper()}'
+            quote_output.value = f"No quote returned for {symbol.upper()}"
             return
 
         symbol_key = symbol.upper()
-        quote_data = result.get(symbol_key, {}).get('quote', {})
+        quote_data = result.get(symbol_key, {}).get("quote", {})
 
         set_quote_summary(
-            quote_number(quote_data, 'lastPrice', 'mark'),
-            quote_number(quote_data, 'bidPrice', 'bid'),
-            quote_number(quote_data, 'askPrice', 'ask'),
-            quote_number(quote_data, 'openPrice', 'open'),
-            quote_number(quote_data, 'highPrice', 'high'),
-            quote_number(quote_data, 'lowPrice', 'low'),
-            quote_number(quote_data, 'closePrice', 'close'),
+            quote_number(quote_data, "lastPrice", "mark"),
+            quote_number(quote_data, "bidPrice", "bid"),
+            quote_number(quote_data, "askPrice", "ask"),
+            quote_number(quote_data, "openPrice", "open"),
+            quote_number(quote_data, "highPrice", "high"),
+            quote_number(quote_data, "lowPrice", "low"),
+            quote_number(quote_data, "closePrice", "close"),
         )
         quote_output.value = json.dumps(result, indent=2)
     except Exception as exc:
         set_quote_summary()
-        quote_output.value = f'Quote error: {exc}'
+        quote_output.value = f"Quote error: {exc}"
 
 
 async def get_chain_click():
-    global raw_chain_data, pending_chain_render_task, chain_dte_min, chain_dte_max, filtered_chain_data
+    global raw_chain_data, pending_chain_render_task, chain_dte_min
+    global chain_dte_max, filtered_chain_data
     symbol = chain_symbol_input.value.strip()
     if not symbol:
-        ui.notify('Enter a ticker symbol first', color='warning')
+        ui.notify("Enter a ticker symbol first", color="warning")
         return
 
-    contract_type = chain_contract_type.value or 'ALL'
-    chain_output.value = 'Loading...'
+    contract_type = chain_contract_type.value or "ALL"
+    chain_output.value = "Loading..."
     try:
         chain = await asyncio.to_thread(fetch_chain, symbol, contract_type)
         if not isinstance(chain, dict):
@@ -795,9 +814,11 @@ async def get_chain_click():
             filtered_chain_data = None
             chain_dte_min = None
             chain_dte_max = None
-            chain_dte_value_label.text = 'DTE <= -'
+            chain_dte_value_label.text = "DTE <= -"
             _set_chain_step_contracts({})
-            chain_output.value = f'Chain error: unexpected response type {type(chain).__name__}'
+            chain_output.value = (
+                f"Chain error: unexpected response type {type(chain).__name__}"
+            )
             return
 
         raw_chain_data = chain
@@ -807,13 +828,13 @@ async def get_chain_click():
             chain_dte_min = min(dte_values)
             chain_dte_max = max(dte_values)
             chain_dte_input.value = str(chain_dte_max)
-            chain_dte_value_label.text = f'DTE <= {chain_dte_max}'
+            chain_dte_value_label.text = f"DTE <= {chain_dte_max}"
             schedule_chain_render()
         else:
             chain_dte_min = None
             chain_dte_max = None
-            chain_dte_input.value = '365'
-            chain_dte_value_label.text = 'DTE <= -'
+            chain_dte_input.value = "365"
+            chain_dte_value_label.text = "DTE <= -"
             _set_chain_step_contracts(chain)
             chain_output.value = json.dumps(chain, indent=2)
     except Exception as exc:
@@ -826,24 +847,32 @@ async def get_chain_click():
             and not pending_chain_render_task.done()
         ):
             pending_chain_render_task.cancel()
-        chain_dte_input.value = '365'
-        chain_dte_value_label.text = 'DTE <= -'
+        chain_dte_input.value = "365"
+        chain_dte_value_label.text = "DTE <= -"
         _set_chain_step_contracts({})
-        chain_output.value = f'Chain error: {exc}'
+        chain_output.value = f"Chain error: {exc}"
 
 
 def on_chain_dte_change(_: Any = None) -> None:
     value = _coerce_int(chain_dte_input.value)
     if value is None:
-        chain_dte_value_label.text = 'Enter a valid integer DTE'
+        chain_dte_value_label.text = "Enter a valid integer DTE"
         return
 
+    """
     if chain_dte_min is not None and chain_dte_max is not None:
         if value < chain_dte_min or value > chain_dte_max:
             chain_dte_value_label.text = (
-                f'Enter {chain_dte_min}..{chain_dte_max}'
+                f"Enter {chain_dte_min}..{chain_dte_max}"
             )
             return
+    """
+    if chain_dte_min is not None and chain_dte_max is not None\
+            and (value < chain_dte_min or value > chain_dte_max):
+        chain_dte_value_label.text = (
+            f"Enter {chain_dte_min}..{chain_dte_max}"
+        )
+        return
 
     schedule_chain_render()
 
@@ -852,8 +881,10 @@ async def refresh_portfolio_snapshot_click() -> None:
     global original_portfolio_rows
 
     refresh_portfolio_snapshot_button.disable()
-    refresh_portfolio_snapshot_button.text = 'Refreshing...'
-    portfolio_snapshot_status_value.text = 'Refreshing shared portfolio snapshot...'
+    refresh_portfolio_snapshot_button.text = "Refreshing..."
+    portfolio_snapshot_status_value.text = (
+        "Refreshing shared portfolio snapshot..."
+    )
     try:
         positions, rows = await ensure_portfolio_snapshot(force_refresh=True)
         original_portfolio_rows = [dict(row) for row in rows]
@@ -862,75 +893,54 @@ async def refresh_portfolio_snapshot_click() -> None:
 
         analysis_rows_table.rows = []
         analysis_rows_table.update()
-        analysis_answer.value = 'Shared portfolio snapshot refreshed.'
+        analysis_answer.value = "Shared portfolio snapshot refreshed."
 
         portfolio_snapshot_status_value.text = (
-            f'Refresh successful: {len(positions)} positions, '
-            f'{len(rows)} rows @ '
+            f"Refresh successful: {len(positions)} positions, "
+            f"{len(rows)} rows @ "
             f'{portfolio_snapshot_as_of.strftime("%Y-%m-%d %H:%M:%S")}'
         )
         ui.notify(
-            f'Refreshed shared snapshot: {len(positions)} positions',
-            color='positive',
+            f"Refreshed shared snapshot: {len(positions)} positions",
+            color="positive",
         )
         await fetch_market_indicators()
     except Exception as exc:
-        portfolio_snapshot_status_value.text = f'Refresh failed: {exc}'
-        ui.notify(f'Portfolio snapshot refresh failed: {exc}', color='negative')
+        portfolio_snapshot_status_value.text = f"Refresh failed: {exc}"
+        ui.notify(f"Portfolio snapshot refresh failed: {exc}", color="negative")
     finally:
-        refresh_portfolio_snapshot_button.text = 'Refresh Portfolio Snapshot'
+        refresh_portfolio_snapshot_button.text = "Refresh Portfolio Snapshot"
         refresh_portfolio_snapshot_button.enable()
 
 
-async def load_portfolio_click():
-    global original_portfolio_rows
 
-    load_portfolio_button.disable()
-    load_portfolio_button.text = 'Displaying...'
-    try:
-        _, rows = await ensure_portfolio_snapshot(force_refresh=False)
-        original_portfolio_rows = [dict(row) for row in rows]
-        portfolio_table.rows = [dict(row) for row in rows]
+def toggle_aggregate_click():
+    global is_aggregated
+
+    if not is_aggregated:
+        rows = list(portfolio_table.rows or [])
+        if not rows:
+            ui.notify("Load portfolio rows first", color="warning")
+            return
+        aggregated_rows = aggregate_rows_by_symbol(rows)
+        portfolio_table.rows = aggregated_rows
         portfolio_table.update()
-        ui.notify(f'Displayed {len(rows)} portfolio rows', color='positive')
-    except Exception as exc:
-        ui.notify(f'Portfolio display failed: {exc}', color='negative')
-    finally:
-        load_portfolio_button.text = 'Display Portfolio'
-        load_portfolio_button.enable()
-
-
-def aggregate_click():
-    rows = list(portfolio_table.rows or [])
-    if not rows:
-        ui.notify('Load portfolio rows first', color='warning')
-        return
-
-    aggregated_rows = aggregate_rows_by_symbol(rows)
-    portfolio_table.rows = aggregated_rows
-    portfolio_table.update()
-    ui.notify(
-        f'Aggregated to {len(aggregated_rows)} symbols',
-        color='positive',
-    )
-
-
-def unaggregate_click():
-    if not original_portfolio_rows:
-        ui.notify('No original rows to restore yet', color='warning')
-        return
-
-    restored_rows = [dict(row) for row in original_portfolio_rows]
-    portfolio_table.rows = restored_rows
-    portfolio_table.update()
-    ui.notify(
-        f'Restored {len(restored_rows)} original rows',
-        color='positive',
-    )
+        is_aggregated = True
+        aggregate_toggle_button.text = "Separate"
+        ui.notify(f"Aggregated to {len(aggregated_rows)} symbols", color="positive")
+    else:
+        if not original_portfolio_rows:
+            ui.notify("No original rows to restore yet", color="warning")
+            return
+        portfolio_table.rows = [dict(row) for row in original_portfolio_rows]
+        portfolio_table.update()
+        is_aggregated = False
+        aggregate_toggle_button.text = "Aggregate"
+        ui.notify(f"Restored {len(original_portfolio_rows)} original rows", color="positive")
 
 
 async def exit_app_click():
-    ui.notify('Closing browser tab and exiting...', color='warning')
+    ui.notify("Closing browser tab and exiting...", color="warning")
     with suppress(Exception):
         await ui.run_javascript('window.open("", "_self");window.close();')
 
@@ -941,11 +951,11 @@ async def exit_app_click():
 async def ask_analysis_click() -> None:
     question = analysis_question_input.value.strip()
     if not question:
-        ui.notify('Enter a question first', color='warning')
+        ui.notify("Enter a question first", color="warning")
         return
 
     analysis_ask_button.disable()
-    analysis_ask_button.text = 'Thinking...'
+    analysis_ask_button.text = "Thinking..."
     try:
         answer_text, rows = await asyncio.to_thread(
             analysis_engine.answer_question,
@@ -955,79 +965,81 @@ async def ask_analysis_click() -> None:
         analysis_rows_table.rows = rows
         analysis_rows_table.update()
     except Exception as exc:
-        analysis_answer.value = f'Analysis error: {exc}'
+        analysis_answer.value = f"Analysis error: {exc}"
     finally:
-        analysis_ask_button.text = 'Ask'
+        analysis_ask_button.text = "Ask"
         analysis_ask_button.enable()
 
 
 async def ask_analysis_llm_click() -> None:
     question = analysis_question_input.value.strip()
     if not question:
-        ui.notify('Enter a question first', color='warning')
+        ui.notify("Enter a question first", color="warning")
         return
 
     analysis_llm_button.disable()
-    analysis_llm_button.text = 'Querying LLM...'
+    analysis_llm_button.text = "Querying LLM..."
     try:
         answer_text, rows, tool_results = await asyncio.to_thread(
             analysis_engine.ask_llm,
             question,
-            analysis_provider_select.value or 'claude',
-            analysis_model_input.value or '',
+            analysis_provider_select.value or "claude",
+            analysis_model_input.value or "",
             bool(analysis_grounded_toggle.value),
             bool(analysis_general_mode_toggle.value),
         )
         analysis_answer.value = answer_text
         analysis_rows_table.rows = rows
         analysis_rows_table.update()
-        if 'get_institutional_ownership' in tool_results:
-            inst_ownership_table.rows = tool_results['get_institutional_ownership']
+        if "get_institutional_ownership" in tool_results:
+            inst_ownership_table.rows = tool_results[
+                "get_institutional_ownership"
+            ]
             inst_ownership_table.update()
     except Exception as exc:
-        analysis_answer.value = f'LLM analysis error: {exc}'
+        analysis_answer.value = f"LLM analysis error: {exc}"
     finally:
-        analysis_llm_button.text = 'Ask LLM'
+        analysis_llm_button.text = "Ask LLM"
         analysis_llm_button.enable()
 
 
 async def get_inst_ownership_click() -> None:
     ticker = inst_ownership_input.value.strip().upper()
     if not ticker:
-        ui.notify('Enter a ticker symbol first', color='warning')
+        ui.notify("Enter a ticker symbol first", color="warning")
         return
     inst_ownership_button.disable()
-    inst_ownership_button.text = 'Fetching...'
+    inst_ownership_button.text = "Fetching..."
     try:
         rows = await asyncio.to_thread(get_institutional_ownership, ticker)
         inst_ownership_table.rows = rows
         inst_ownership_table.update()
     except Exception as exc:
-        ui.notify(f'Ownership fetch error: {exc}', color='negative')
+        ui.notify(f"Ownership fetch error: {exc}", color="negative")
     finally:
-        inst_ownership_button.text = 'Get Ownership'
+        inst_ownership_button.text = "Get Ownership"
         inst_ownership_button.enable()
 
 
 async def plot_historicals_click(silent_if_incomplete: bool = False) -> None:
-    raw_symbols = (historicals_symbols_input.value or '').strip()
+    raw_symbols = (historicals_symbols_input.value or "").strip()
     symbols = utilities.parse_symbols(raw_symbols)
     if not symbols:
         if not silent_if_incomplete:
-            ui.notify('Enter one or more ticker symbols', color='warning')
+            ui.notify("Enter one or more ticker symbols", color="warning")
         return
 
     days = utilities.coerce_positive_int(historicals_days_input.value)
     if days is None:
         if not silent_if_incomplete:
-            ui.notify('Enter a valid positive number of days', color='warning')
+            ui.notify("Enter a valid positive number of days", color="warning")
         return
 
-    mode = (historicals_mode_select.value or 'denormalize').strip().lower()
-    normalize = mode == 'normalize'
+    mode = (historicals_mode_select.value or "denormalize").strip().lower()
+    normalize = mode == "normalize"
 
     historicals_plot_button.disable()
-    historicals_plot_button.text = 'Plotting...'
+    historicals_plot_button.text = "Plotting..."
     try:
         symbol_series = await asyncio.to_thread(
             utilities.collect_historical_series,
@@ -1037,9 +1049,9 @@ async def plot_historicals_click(silent_if_incomplete: bool = False) -> None:
         )
         _render_historicals_plot(symbol_series, normalize)
     except Exception as exc:
-        ui.notify(f'Unable to plot historicals: {exc}', color='negative')
+        ui.notify(f"Unable to plot historicals: {exc}", color="negative")
     finally:
-        historicals_plot_button.text = 'Plot'
+        historicals_plot_button.text = "Plot"
         historicals_plot_button.enable()
 
 
@@ -1050,34 +1062,36 @@ async def on_historicals_mode_change(_: Any = None) -> None:
 async def refresh_historical_totals_click() -> None:
     days = _coerce_int(historicals_totals_days_input.value)
     if days is None or days <= 0:
-        ui.notify('Days must be a positive integer', color='warning')
+        ui.notify("Days must be a positive integer", color="warning")
         return
 
     historicals_refresh_button.disable()
-    historicals_refresh_button.text = 'Refreshing...'
+    historicals_refresh_button.text = "Refreshing..."
     try:
-        payload = await asyncio.to_thread(historicals_store.get_totals_payload, days)
-        portfolio_rows = payload.get('portfolio_rows', [])
-        account_rows = payload.get('account_rows', [])
-        account_series = payload.get('account_series', {})
+        payload = await asyncio.to_thread(
+            historicals_store.get_totals_payload, days
+        )
+        portfolio_rows = payload.get("portfolio_rows", [])
+        account_rows = payload.get("account_rows", [])
+        account_series = payload.get("account_series", {})
 
         _render_portfolio_totals_plot(portfolio_rows)
         _render_account_totals_plot(account_series)
 
         historicals_status_value.text = (
-            f'Loaded {len(portfolio_rows)} portfolio points, '
-            f'{len(account_rows)} account rows'
+            f"Loaded {len(portfolio_rows)} portfolio points, "
+            f"{len(account_rows)} account rows"
         )
     except Exception as exc:
-        historicals_status_value.text = f'Historical refresh error: {exc}'
+        historicals_status_value.text = f"Historical refresh error: {exc}"
     finally:
-        historicals_refresh_button.text = 'Refresh Totals'
+        historicals_refresh_button.text = "Refresh Totals"
         historicals_refresh_button.enable()
 
 
 async def capture_daily_snapshot_click() -> None:
     capture_snapshot_button.disable()
-    capture_snapshot_button.text = 'Fetching...'
+    capture_snapshot_button.text = "Fetching..."
     try:
         positions, _ = await ensure_portfolio_snapshot(force_refresh=False)
         utc_today = datetime.now(timezone.utc).date()
@@ -1092,9 +1106,9 @@ async def capture_daily_snapshot_click() -> None:
         )
         await refresh_historical_totals_click()
     except Exception as exc:
-        historicals_status_value.text = f'Snapshot fetch error: {exc}'
+        historicals_status_value.text = f"Snapshot fetch error: {exc}"
     finally:
-        capture_snapshot_button.text = 'Fetch Daily Snapshot (UTC)'
+        capture_snapshot_button.text = "Fetch Daily Snapshot (UTC)"
         capture_snapshot_button.enable()
 
 
@@ -1102,10 +1116,10 @@ def _parse_iso_date(value: Any) -> date | None:
     if not value:
         return None
     text = str(value).strip()
-    if not text or text == 'UnknownDay':
+    if not text or text == "UnknownDay":
         return None
     try:
-        return datetime.strptime(text[:10], '%Y-%m-%d').date()
+        return datetime.strptime(text[:10], "%Y-%m-%d").date()
     except ValueError:
         return None
 
@@ -1117,8 +1131,8 @@ def _build_symbol_dividend_payload(
 ) -> dict[str, Any]:
     if DividendForecaster is None:
         raise RuntimeError(
-            f'dividend_prediction unavailable: '
-            f'{_dividend_prediction_import_error}'
+            f"dividend_prediction unavailable: "
+            f"{_dividend_prediction_import_error}"
         )
 
     forecaster = DividendForecaster.from_yfinance(symbol, shares=shares)
@@ -1132,42 +1146,42 @@ def _build_symbol_dividend_payload(
 
     historical_rows = [
         {
-            'date': pd_ts.strftime('%Y-%m-%d'),
-            'div_per_share': round(float(amount), 4),
+            "date": pd_ts.strftime("%Y-%m-%d"),
+            "div_per_share": round(float(amount), 4),
         }
         for pd_ts, amount in history_series.tail(80).items()
     ]
 
     annual_rows = [
         {
-            'year': int(pd_ts.year),
-            'annual_div_per_share': round(float(total), 4),
-            'annual_income': round(float(total) * shares, 2),
+            "year": int(pd_ts.year),
+            "annual_div_per_share": round(float(total), 4),
+            "annual_income": round(float(total) * shares, 2),
         }
         for pd_ts, total in forecaster.annual.tail(12).items()
     ]
 
-    base = result.scenarios.get('base')
-    bear = result.scenarios.get('bear')
-    bull = result.scenarios.get('bull')
+    base = result.scenarios.get("base")
+    bear = result.scenarios.get("bear")
+    bull = result.scenarios.get("bull")
     projection_rows: list[dict[str, Any]] = []
     if base and bear and bull:
         projection_rows.extend(
             {
-                'year': year,
-                'bear_income': round(bear.annual_dividends[idx] * shares, 2),
-                'base_income': round(base.annual_dividends[idx] * shares, 2),
-                'bull_income': round(bull.annual_dividends[idx] * shares, 2),
+                "year": year,
+                "bear_income": round(bear.annual_dividends[idx] * shares, 2),
+                "base_income": round(base.annual_dividends[idx] * shares, 2),
+                "bull_income": round(bull.annual_dividends[idx] * shares, 2),
             }
             for idx, year in enumerate(base.years)
         )
 
     return {
-        'summary': result.summary(),
-        'historical_points': historical_points,
-        'historical_rows': historical_rows,
-        'annual_rows': annual_rows,
-        'projection_rows': projection_rows,
+        "summary": result.summary(),
+        "historical_points": historical_points,
+        "historical_rows": historical_rows,
+        "annual_rows": annual_rows,
+        "projection_rows": projection_rows,
     }
 
 
@@ -1177,43 +1191,47 @@ def _render_income_symbol_plot(points: list[tuple[datetime, float]]) -> None:
     income_symbol_plot_host.clear()
     with income_symbol_plot_host:
         if not points:
-            ui.label('No dividend history available.').classes('text-sm text-orange')
+            ui.label("No dividend history available.").classes(
+                "text-sm text-orange"
+            )
             return
 
-        with ui.pyplot(figsize=(16, 5), close=False).classes('w-full'):
+        with ui.pyplot(figsize=(16, 5), close=False).classes("w-full"):
             xs = [item[0] for item in points]
             ys = [item[1] for item in points]
-            plt.plot(xs, ys, marker='o', linewidth=1.5)
-            plt.grid(True, linestyle='--', alpha=0.6)
-            plt.xlabel('Payment Date')
-            plt.ylabel('Dividend / Share ($)')
-            plt.title('Historical Dividends')
+            plt.plot(xs, ys, marker="o", linewidth=1.5)
+            plt.grid(True, linestyle="--", alpha=0.6)
+            plt.xlabel("Payment Date")
+            plt.ylabel("Dividend / Share ($)")
+            plt.title("Historical Dividends")
             plt.tight_layout()
 
 
 async def income_symbol_analyze_click() -> None:
-    symbol = (income_symbol_input.value or '').strip().upper()
+    symbol = (income_symbol_input.value or "").strip().upper()
     if not symbol:
-        ui.notify('Enter a ticker symbol', color='warning')
+        ui.notify("Enter a ticker symbol", color="warning")
         return
 
     shares_value = income_symbol_shares_input.value
     try:
-        shares = float(shares_value) if shares_value not in (None, '') else 1.0
+        shares = float(shares_value) if shares_value not in (None, "") else 1.0
     except ValueError:
-        ui.notify('Shares must be a valid number', color='warning')
+        ui.notify("Shares must be a valid number", color="warning")
         return
     if shares <= 0:
-        ui.notify('Shares must be greater than zero', color='warning')
+        ui.notify("Shares must be greater than zero", color="warning")
         return
 
-    forecast_years = utilities.coerce_positive_int(income_symbol_years_input.value)
+    forecast_years = utilities.coerce_positive_int(
+        income_symbol_years_input.value
+    )
     if forecast_years is None:
-        ui.notify('Forecast years must be a positive integer', color='warning')
+        ui.notify("Forecast years must be a positive integer", color="warning")
         return
 
     income_symbol_button.disable()
-    income_symbol_button.text = 'Analyzing...'
+    income_symbol_button.text = "Analyzing..."
     try:
         payload = await asyncio.to_thread(
             _build_symbol_dividend_payload,
@@ -1221,26 +1239,27 @@ async def income_symbol_analyze_click() -> None:
             shares,
             forecast_years,
         )
-        income_symbol_summary.value = payload['summary']
-        income_symbol_history_table.rows = payload['historical_rows']
+        income_symbol_summary.value = payload["summary"]
+        income_symbol_history_table.rows = payload["historical_rows"]
         income_symbol_history_table.update()
-        income_symbol_annual_table.rows = payload['annual_rows']
+        income_symbol_annual_table.rows = payload["annual_rows"]
         income_symbol_annual_table.update()
-        income_symbol_projection_table.rows = payload['projection_rows']
+        income_symbol_projection_table.rows = payload["projection_rows"]
         income_symbol_projection_table.update()
-        _render_income_symbol_plot(payload['historical_points'])
+        _render_income_symbol_plot(payload["historical_points"])
     except Exception as exc:
-        ui.notify(f'Income analysis error: {exc}', color='negative')
+        ui.notify(f"Income analysis error: {exc}", color="negative")
     finally:
-        income_symbol_button.text = 'Analyze'
+        income_symbol_button.text = "Analyze"
         income_symbol_button.enable()
 
 
 def _selected_income_accounts() -> set[str]:
-    selected: set[str] = set()
-    for account_name, checkbox in income_account_checkboxes.items():
-        if bool(checkbox.value):
-            selected.add(account_name)
+    selected: set[str] = {
+        account_name
+        for account_name, checkbox in income_account_checkboxes.items()
+        if bool(checkbox.value)
+    }
     return selected
 
 
@@ -1260,7 +1279,9 @@ def _portfolio_income_projection(
         if pos.quantity <= 0 or pos.div_pay_amount <= 0 or pos.div_freq <= 0:
             continue
 
-        start = _parse_iso_date(pos.next_div_pay_date) or _parse_iso_date(pos.div_pay_date)
+        start = _parse_iso_date(pos.next_div_pay_date) or _parse_iso_date(
+            pos.div_pay_date
+        )
         if start is None:
             continue
 
@@ -1273,25 +1294,27 @@ def _portfolio_income_projection(
             if days_out >= 0:
                 events.append(
                     {
-                        'date': pay_date.isoformat(),
-                        'days_out': days_out,
-                        'symbol': pos.symbol,
-                        'account': pos.account_name,
-                        'amount': round(amount, 2),
+                        "date": pay_date.isoformat(),
+                        "days_out": days_out,
+                        "symbol": pos.symbol,
+                        "account": pos.account_name,
+                        "amount": round(amount, 2),
                     }
                 )
             pay_date = pay_date + timedelta(days=interval_days)
 
-    events.sort(key=lambda row: (row['date'], row['symbol'], row['account']))
-    month_income = sum(row['amount'] for row in events if row['days_out'] <= 30)
-    quarter_income = sum(row['amount'] for row in events if row['days_out'] <= 90)
-    year_income = sum(row['amount'] for row in events if row['days_out'] <= 365)
+    events.sort(key=lambda row: (row["date"], row["symbol"], row["account"]))
+    month_income = sum(row["amount"] for row in events if row["days_out"] <= 30)
+    quarter_income = sum(
+        row["amount"] for row in events if row["days_out"] <= 90
+    )
+    year_income = sum(row["amount"] for row in events if row["days_out"] <= 365)
 
     return (
         {
-            'month': round(month_income, 2),
-            'quarter': round(quarter_income, 2),
-            'year': round(year_income, 2),
+            "month": round(month_income, 2),
+            "quarter": round(quarter_income, 2),
+            "year": round(year_income, 2),
         },
         events,
     )
@@ -1299,16 +1322,16 @@ def _portfolio_income_projection(
 
 async def refresh_portfolio_income_click() -> None:
     income_portfolio_button.disable()
-    income_portfolio_button.text = 'Refreshing...'
+    income_portfolio_button.text = "Refreshing..."
     try:
         selected_accounts = _selected_income_accounts()
         if not selected_accounts:
-            income_month_value.text = '$0.00'
-            income_quarter_value.text = '$0.00'
-            income_year_value.text = '$0.00'
+            income_month_value.text = "$0.00"
+            income_quarter_value.text = "$0.00"
+            income_year_value.text = "$0.00"
             income_events_table.rows = []
             income_events_table.update()
-            ui.notify('Select at least one account', color='warning')
+            ui.notify("Select at least one account", color="warning")
             return
 
         positions, _ = await ensure_portfolio_snapshot(force_refresh=False)
@@ -1323,168 +1346,166 @@ async def refresh_portfolio_income_click() -> None:
         income_events_table.rows = events[:500]
         income_events_table.update()
     except Exception as exc:
-        ui.notify(f'Portfolio income refresh failed: {exc}', color='negative')
+        ui.notify(f"Portfolio income refresh failed: {exc}", color="negative")
     finally:
-        income_portfolio_button.text = 'Refresh Portfolio Income'
+        income_portfolio_button.text = "Refresh Portfolio Income"
         income_portfolio_button.enable()
 
 
 def on_income_account_change(_: Any = None) -> None:
     asyncio.create_task(refresh_portfolio_income_click())
 
+
 # ...existing code...
 
+
 def on_analysis_provider_change(_: Any = None) -> None:
-    provider = (analysis_provider_select.value or 'claude').strip().lower()
+    provider = (analysis_provider_select.value or "claude").strip().lower()
     default_model = analysis_default_models.get(
         provider,
-        analysis_default_models['claude'],
+        analysis_default_models["claude"],
     )
     analysis_model_input.value = default_model
 
 
-with ui.tabs().classes('w-full') as tabs:
-    dashboard_tab = ui.tab('Dashboard')
-    portfolio_tab = ui.tab('Portfolio')
-    options_tab = ui.tab('Options')
-    historicals_tab = ui.tab('Historicals')
-    income_tab = ui.tab('Income')
-    analysis_tab = ui.tab('Analysis')
+with ui.tabs().classes("w-full") as tabs:
+    dashboard_tab = ui.tab("Dashboard")
+    portfolio_tab = ui.tab("Portfolio")
+    options_tab = ui.tab("Options")
+    historicals_tab = ui.tab("Historicals")
+    income_tab = ui.tab("Income")
+    analysis_tab = ui.tab("Analysis")
 
-with ui.tab_panels(tabs, value=dashboard_tab).classes('w-full'):
+with ui.tab_panels(tabs, value=dashboard_tab).classes("w-full"):
     with ui.tab_panel(dashboard_tab):
-        with ui.card().classes('w-full'):
-            ui.label('Dashboard').classes('text-xl font-semibold')
-            with ui.row().classes('items-center gap-4'):
-                ui.label('VIX:').classes('font-semibold')
-                vix_label = ui.label('…').classes('text-lg')
-                ui.label('S&P 500:').classes('font-semibold ml-4')
-                sp500_label = ui.label('…').classes('text-lg')
-            with ui.row().classes('items-center gap-3'):
+        with ui.card().classes("w-full"):
+            ui.label("Dashboard").classes("text-xl font-semibold")
+            with ui.row().classes("items-center gap-4"):
+                ui.label("VIX:").classes("font-semibold")
+                vix_label = ui.label("…").classes("text-lg")
+                ui.label("S&P 500:").classes("font-semibold ml-4")
+                sp500_label = ui.label("…").classes("text-lg")
+            with ui.row().classes("items-center gap-3"):
                 refresh_portfolio_snapshot_button = ui.button(
-                    'Refresh Portfolio Snapshot',
+                    "Refresh Portfolio Snapshot",
                     on_click=refresh_portfolio_snapshot_click,
                 )
                 portfolio_snapshot_status_value = ui.label(
-                    'No shared snapshot loaded'
-                ).classes('text-sm')
-            ui.button('Exit Application', on_click=exit_app_click)
+                    "No shared snapshot loaded"
+                ).classes("text-sm")
+            ui.button("Exit Application", on_click=exit_app_click)
 
     with ui.tab_panel(portfolio_tab):
-        with ui.row().classes('w-full items-start gap-4 no-wrap'):
-            with ui.column().classes('w-1/5 min-w-[220px]'):
-                with ui.card().classes('w-full'):
-                    ui.label('Schwab Quote').classes('text-xl font-semibold')
-                    symbol_input = ui.input('Symbol').props(
-                        'clearable'
-                    ).classes('w-40')
-                    ui.button('Get Quote', on_click=get_quote_click)
-
-                    with ui.row():
-                        ui.label('Last:')
-                        last_value = ui.label('-').classes('font-semibold')
-                        ui.label('Bid:')
-                        bid_value = ui.label('-').classes('font-semibold')
-                        ui.label('Ask:')
-                        ask_value = ui.label('-').classes('font-semibold')
-
-                    with ui.row():
-                        ui.label('Open:')
-                        open_value = ui.label('-').classes('font-semibold')
-                        ui.label('High:')
-                        high_value = ui.label('-').classes('font-semibold')
-                        ui.label('Low:')
-                        low_value = ui.label('-').classes('font-semibold')
-                        ui.label('Close:')
-                        close_value = ui.label('-').classes('font-semibold')
-
-                    quote_output = ui.textarea(label='Quote JSON')
-                    quote_output.props('readonly').classes('w-full')
-
-                with ui.card().classes('w-full'):
-                    ui.label('Portfolio Actions').classes('text-xl font-semibold')
-                    load_portfolio_button = ui.button(
-                        'Display Portfolio',
-                        on_click=load_portfolio_click,
+        with ui.row().classes("w-full items-start gap-4 no-wrap"):
+            with ui.column().classes("w-1/5 min-w-[220px]"):
+                with ui.card().classes("w-full"):
+                    ui.label("Schwab Quote").classes("text-xl font-semibold")
+                    symbol_input = (
+                        ui.input("Symbol").props("clearable").classes("w-40")
                     )
-                    portfolio_actions_status_value = ui.label(
-                        'No shared snapshot loaded'
-                    ).classes('text-sm')
-                    ui.button('aggregate', on_click=aggregate_click)
-                    ui.button('unaggregate', on_click=unaggregate_click)
+                    ui.button("Get Quote", on_click=get_quote_click)
 
-            with ui.column().classes('flex-1 min-w-0'):
-                with ui.card().classes('w-full'):
-                    ui.label('Portfolio').classes('text-xl font-semibold')
+                    with ui.row():
+                        ui.label("Last:")
+                        last_value = ui.label("-").classes("font-semibold")
+                        ui.label("Bid:")
+                        bid_value = ui.label("-").classes("font-semibold")
+                        ui.label("Ask:")
+                        ask_value = ui.label("-").classes("font-semibold")
+
+                    with ui.row():
+                        ui.label("Open:")
+                        open_value = ui.label("-").classes("font-semibold")
+                        ui.label("High:")
+                        high_value = ui.label("-").classes("font-semibold")
+                        ui.label("Low:")
+                        low_value = ui.label("-").classes("font-semibold")
+                        ui.label("Close:")
+                        close_value = ui.label("-").classes("font-semibold")
+
+                    quote_output = ui.textarea(label="Quote JSON")
+                    quote_output.props("readonly").classes("w-full")
+
+                with ui.card().classes("w-full"):
+                    ui.label("Portfolio Actions").classes(
+                        "text-xl font-semibold"
+                    )
+                    aggregate_toggle_button = ui.button(
+                        "Aggregate", on_click=toggle_aggregate_click
+                    )
+
+            with ui.column().classes("flex-1 min-w-0"):
+                with ui.card().classes("w-full"):
+                    ui.label("Portfolio").classes("text-xl font-semibold")
                     portfolio_columns = [
                         {
-                            'name': 'symbol',
-                            'label': 'Symbol',
-                            'field': 'symbol',
-                            'sortable': True,
-                            'style': 'width: 10ch; max-width: 10ch;',
+                            "name": "symbol",
+                            "label": "Symbol",
+                            "field": "symbol",
+                            "sortable": True,
+                            "style": "width: 10ch; max-width: 10ch;",
                         },
                         {
-                            'name': 'type',
-                            'label': 'Type',
-                            'field': 'type',
-                            'sortable': True,
+                            "name": "type",
+                            "label": "Type",
+                            "field": "type",
+                            "sortable": True,
                         },
                         {
-                            'name': 'account',
-                            'label': 'Account',
-                            'field': 'account',
-                            'sortable': True,
+                            "name": "account",
+                            "label": "Account",
+                            "field": "account",
+                            "sortable": True,
                         },
                         {
-                            'name': 'underlying',
-                            'label': 'Underlying',
-                            'field': 'underlying',
-                            'sortable': True,
+                            "name": "underlying",
+                            "label": "Underlying",
+                            "field": "underlying",
+                            "sortable": True,
                         },
                         {
-                            'name': 'quantity',
-                            'label': 'Qty',
-                            'field': 'quantity',
-                            'sortable': True,
-                            'align': 'right',
+                            "name": "quantity",
+                            "label": "Qty",
+                            "field": "quantity",
+                            "sortable": True,
+                            "align": "right",
                         },
                         {
-                            'name': 'last',
-                            'label': 'Last',
-                            'field': 'last',
-                            'sortable': True,
-                            'align': 'right',
+                            "name": "last",
+                            "label": "Last",
+                            "field": "last",
+                            "sortable": True,
+                            "align": "right",
                         },
                         {
-                            'name': 'market_value',
-                            'label': 'Mkt Value',
-                            'field': 'market_value',
-                            'sortable': True,
-                            'align': 'right',
+                            "name": "market_value",
+                            "label": "Mkt Value",
+                            "field": "market_value",
+                            "sortable": True,
+                            "align": "right",
                         },
                         {
-                            'name': 'pl',
-                            'label': 'P/L',
-                            'field': 'pl',
-                            'sortable': True,
-                            'align': 'right',
+                            "name": "pl",
+                            "label": "P/L",
+                            "field": "pl",
+                            "sortable": True,
+                            "align": "right",
                         },
                         {
-                            'name': 'pe_ratio',
-                            'label': 'P/E',
-                            'field': 'pe_ratio',
-                            'sortable': True,
-                            'align': 'right',
+                            "name": "pe_ratio",
+                            "label": "P/E",
+                            "field": "pe_ratio",
+                            "sortable": True,
+                            "align": "right",
                         },
                     ]
-                    with ui.element('div').classes(
-                        'w-full portfolio-table-wrap'
+                    with ui.element("div").classes(
+                        "w-full portfolio-table-wrap"
                     ):
                         portfolio_table = ui.table(
                             columns=portfolio_columns,
                             rows=[],
-                        ).classes('w-max min-w-full')
+                        ).classes("w-max min-w-full")
                     portfolio_table.props(
                         (
                             'pagination={"rowsPerPage":0} '
@@ -1493,258 +1514,305 @@ with ui.tab_panels(tabs, value=dashboard_tab).classes('w-full'):
                     )
 
     with ui.tab_panel(options_tab):
-        with ui.row().classes('w-full items-start gap-4 no-wrap'):
-            with ui.column().classes('w-1/3 min-w-[320px]'):
-                with ui.card().classes('w-full'):
-                    ui.label('Options Chain Controls').classes(
-                        'text-xl font-semibold'
+        with ui.row().classes("w-full items-start gap-4 no-wrap"):
+            with ui.column().classes("w-1/3 min-w-[320px]"):
+                with ui.card().classes("w-full"):
+                    ui.label("Options Chain Controls").classes(
+                        "text-xl font-semibold"
                     )
-                    chain_symbol_input = ui.input('Symbol').props(
-                        'clearable'
-                    ).classes('w-40')
+                    chain_symbol_input = (
+                        ui.input("Symbol").props("clearable").classes("w-40")
+                    )
                     chain_contract_type = ui.select(
-                        options=['ALL', 'CALL', 'PUT'],
-                        value='ALL',
-                        label='Contract Type',
-                    ).classes('w-40')
-                    chain_dte_input = ui.input(
-                        label='DTE',
-                        value='365',
-                        on_change=on_chain_dte_change,
-                    ).props('type=number').classes('w-40')
-                    chain_dte_value_label = ui.label('DTE <= -').classes(
-                        'text-xs'
+                        options=["ALL", "CALL", "PUT"],
+                        value="ALL",
+                        label="Contract Type",
+                    ).classes("w-40")
+                    chain_dte_input = (
+                        ui.input(
+                            label="DTE",
+                            value="365",
+                            on_change=on_chain_dte_change,
+                        )
+                        .props("type=number")
+                        .classes("w-40")
                     )
-                    ui.button('Get Chain', on_click=get_chain_click)
+                    chain_dte_value_label = ui.label("DTE <= -").classes(
+                        "text-xs"
+                    )
+                    ui.button("Get Chain", on_click=get_chain_click)
 
-                with ui.card().classes('w-full'):
-                    ui.label('Chain Step').classes('text-lg font-semibold')
-                    with ui.row().classes('items-center gap-4'):
+                with ui.card().classes("w-full"):
+                    ui.label("Chain Step").classes("text-lg font-semibold")
+                    with ui.row().classes("items-center gap-4"):
                         chain_step_itm_checkbox = ui.checkbox(
-                            'ITM',
+                            "ITM",
                             value=True,
                             on_change=on_chain_step_filter_change,
                         )
                         chain_step_ntm_checkbox = ui.checkbox(
-                            'NTM',
+                            "NTM",
                             value=True,
                             on_change=on_chain_step_filter_change,
                         )
                         chain_step_otm_checkbox = ui.checkbox(
-                            'OTM',
+                            "OTM",
                             value=True,
                             on_change=on_chain_step_filter_change,
                         )
-                    with ui.row().classes('items-center gap-2'):
+                    with ui.row().classes("items-center gap-2"):
                         chain_step_up_button = ui.button(
-                            'Up',
+                            "Up",
                             on_click=on_chain_step_up,
                         )
                         chain_step_down_button = ui.button(
-                            'Down',
+                            "Down",
                             on_click=on_chain_step_down,
                         )
-                        chain_step_position_label = ui.label('0 / 0').classes(
-                            'text-sm'
+                        chain_step_position_label = ui.label("0 / 0").classes(
+                            "text-sm"
                         )
 
-                    with ui.row().classes('items-center gap-2'):
-                        ui.label('Description:')
-                        chain_step_description_value = ui.label('-').classes(
-                            'font-semibold'
+                    with ui.row().classes("items-center gap-2"):
+                        ui.label("Description:")
+                        chain_step_description_value = ui.label("-").classes(
+                            "font-semibold"
                         )
-                    with ui.row().classes('items-center gap-4'):
-                        ui.label('Bid:')
-                        chain_step_bid_value = ui.label('-').classes(
-                            'font-semibold'
+                    with ui.row().classes("items-center gap-4"):
+                        ui.label("Bid:")
+                        chain_step_bid_value = ui.label("-").classes(
+                            "font-semibold"
                         )
-                        ui.label('Ask:')
-                        chain_step_ask_value = ui.label('-').classes(
-                            'font-semibold'
+                        ui.label("Ask:")
+                        chain_step_ask_value = ui.label("-").classes(
+                            "font-semibold"
                         )
-                        ui.label('Last:')
-                        chain_step_last_value = ui.label('-').classes(
-                            'font-semibold'
+                        ui.label("Last:")
+                        chain_step_last_value = ui.label("-").classes(
+                            "font-semibold"
                         )
-                        ui.label('Mark:')
-                        chain_step_mark_value = ui.label('-').classes(
-                            'font-semibold'
+                        ui.label("Mark:")
+                        chain_step_mark_value = ui.label("-").classes(
+                            "font-semibold"
                         )
-                    with ui.row().classes('items-center gap-4'):
-                        ui.label('DTE:')
-                        chain_step_dte_value = ui.label('-').classes(
-                            'font-semibold'
+                    with ui.row().classes("items-center gap-4"):
+                        ui.label("DTE:")
+                        chain_step_dte_value = ui.label("-").classes(
+                            "font-semibold"
                         )
-                        ui.label('Premium %:')
-                        chain_step_premium_value = ui.label('-').classes(
-                            'font-semibold'
+                        ui.label("Premium %:")
+                        chain_step_premium_value = ui.label("-").classes(
+                            "font-semibold"
                         )
-                        ui.label('Annualized %:')
-                        chain_step_annualized_value = ui.label('-').classes(
-                            'font-semibold'
+                        ui.label("Annualized %:")
+                        chain_step_annualized_value = ui.label("-").classes(
+                            "font-semibold"
                         )
 
                     chain_step_up_button.disable()
                     chain_step_down_button.disable()
 
-            with ui.column().classes('flex-1 min-w-0'):
-                with ui.card().classes('w-full'):
-                    ui.label('Options Chain Display').classes(
-                        'text-xl font-semibold'
+            with ui.column().classes("flex-1 min-w-0"):
+                with ui.card().classes("w-full"):
+                    ui.label("Options Chain Display").classes(
+                        "text-xl font-semibold"
                     )
-                    chain_output = ui.textarea(label='Chain JSON')
-                    chain_output.props('readonly').classes('w-full')
-                    chain_output.style('height: 75vh;')
+                    chain_output = ui.textarea(label="Chain JSON")
+                    chain_output.props("readonly").classes("w-full")
+                    chain_output.style("height: 75vh;")
 
     with ui.tab_panel(historicals_tab):
-        with ui.column().classes('w-full gap-4'):
-            with ui.card().classes('w-full'):
-                ui.label('Historical Stock Prices').classes('text-xl font-semibold')
+        with ui.column().classes("w-full gap-4"):
+            with ui.card().classes("w-full"):
+                ui.label("Historical Stock Prices").classes(
+                    "text-xl font-semibold"
+                )
                 historicals_symbols_input = ui.input(
-                    'Ticker symbols',
-                    placeholder='AAPL or AAPL,MSFT,GOOG',
-                ).classes('w-full')
-                with ui.row().classes('items-center gap-3 w-full'):
-                    historicals_days_input = ui.input(
-                        'Days',
-                        value='1825',
-                        on_change=on_historicals_mode_change,
-                    ).props('type=number min=1').classes('w-32')
+                    "Ticker symbols",
+                    placeholder="AAPL or AAPL,MSFT,GOOG",
+                ).classes("w-full")
+                with ui.row().classes("items-center gap-3 w-full"):
+                    historicals_days_input = (
+                        ui.input(
+                            "Days",
+                            value="1825",
+                            on_change=on_historicals_mode_change,
+                        )
+                        .props("type=number min=1")
+                        .classes("w-32")
+                    )
                     historicals_mode_select = ui.select(
-                        options=['denormalize', 'normalize'],
-                        value='denormalize',
-                        label='Mode',
+                        options=["denormalize", "normalize"],
+                        value="denormalize",
+                        label="Mode",
                         on_change=on_historicals_mode_change,
-                    ).classes('w-48')
+                    ).classes("w-48")
                     historicals_plot_button = ui.button(
-                        'Plot',
+                        "Plot",
                         on_click=plot_historicals_click,
                     )
 
-            with ui.card().classes('w-full'):
-                historicals_plot_host = ui.column().classes('w-full')
-                ui.label('Click Plot to render chart').classes('text-sm text-gray')
+            with ui.card().classes("w-full"):
+                historicals_plot_host = ui.column().classes("w-full")
+                ui.label("Click Plot to render chart").classes(
+                    "text-sm text-gray"
+                )
 
-            with ui.card().classes('w-full'):
-                ui.label('Portfolio History (UTC Daily Snapshots)').classes('text-xl font-semibold')
-                with ui.row().classes('items-center gap-3 w-full'):
+            with ui.card().classes("w-full"):
+                ui.label("Portfolio History (UTC Daily Snapshots)").classes(
+                    "text-xl font-semibold"
+                )
+                with ui.row().classes("items-center gap-3 w-full"):
                     capture_snapshot_button = ui.button(
-                        'Fetch Daily Snapshot (UTC)',
+                        "Fetch Daily Snapshot (UTC)",
                         on_click=capture_daily_snapshot_click,
                     )
-                    historicals_totals_days_input = ui.input(
-                        'Lookback days',
-                        value='365',
-                    ).props('type=number min=1').classes('w-32')
+                    historicals_totals_days_input = (
+                        ui.input(
+                            "Lookback days",
+                            value="365",
+                        )
+                        .props("type=number min=1")
+                        .classes("w-32")
+                    )
                     historicals_refresh_button = ui.button(
-                        'Display Totals',
+                        "Display Totals",
                         on_click=refresh_historical_totals_click,
                     )
-                    historicals_status_value = ui.label('No snapshots yet').classes('text-sm')
+                    historicals_status_value = ui.label(
+                        "No snapshots yet"
+                    ).classes("text-sm")
 
-                historicals_totals_plot_host = ui.column().classes('w-full')
-                historicals_accounts_plot_host = ui.column().classes('w-full')
+                historicals_totals_plot_host = ui.column().classes("w-full")
+                historicals_accounts_plot_host = ui.column().classes("w-full")
 
     with ui.tab_panel(income_tab):
-        with ui.column().classes('w-full gap-4'):
-            with ui.card().classes('w-full'):
-                ui.label('Stock Dividend History & Forecast').classes(
-                    'text-xl font-semibold'
+        with ui.column().classes("w-full gap-4"):
+            with ui.card().classes("w-full"):
+                ui.label("Stock Dividend History & Forecast").classes(
+                    "text-xl font-semibold"
                 )
-                with ui.row().classes('items-center gap-3 w-full'):
+                with ui.row().classes("items-center gap-3 w-full"):
                     income_symbol_input = ui.input(
-                        'Ticker',
-                        placeholder='AAPL',
-                    ).classes('w-32')
-                    income_symbol_shares_input = ui.input(
-                        'Shares',
-                        value='100',
-                    ).props('type=number min=0.0001 step=0.0001').classes('w-32')
-                    income_symbol_years_input = ui.input(
-                        'Forecast years',
-                        value='5',
-                    ).props('type=number min=1').classes('w-32')
+                        "Ticker",
+                        placeholder="AAPL",
+                    ).classes("w-32")
+                    income_symbol_shares_input = (
+                        ui.input(
+                            "Shares",
+                            value="100",
+                        )
+                        .props("type=number min=0.0001 step=0.0001")
+                        .classes("w-32")
+                    )
+                    income_symbol_years_input = (
+                        ui.input(
+                            "Forecast years",
+                            value="5",
+                        )
+                        .props("type=number min=1")
+                        .classes("w-32")
+                    )
                     income_symbol_button = ui.button(
-                        'Analyze',
+                        "Analyze",
                         on_click=income_symbol_analyze_click,
                     )
 
-                income_symbol_summary = ui.textarea(label='Summary').classes('w-full')
-                income_symbol_summary.props('readonly')
+                income_symbol_summary = ui.textarea(label="Summary").classes(
+                    "w-full"
+                )
+                income_symbol_summary.props("readonly")
 
-                with ui.card().classes('w-full'):
-                    income_symbol_plot_host = ui.column().classes('w-full')
-                    ui.label('Run Analyze to render dividend history').classes(
-                        'text-sm text-gray'
+                with ui.card().classes("w-full"):
+                    income_symbol_plot_host = ui.column().classes("w-full")
+                    ui.label("Run Analyze to render dividend history").classes(
+                        "text-sm text-gray"
                     )
 
-                with ui.row().classes('w-full gap-4 items-start no-wrap'):
-                    with ui.column().classes('w-1/2 min-w-0'):
+                with ui.row().classes("w-full gap-4 items-start no-wrap"):
+                    with ui.column().classes("w-1/2 min-w-0"):
                         income_symbol_history_table = ui.table(
                             columns=[
-                                {'name': 'date', 'label': 'Date', 'field': 'date'},
                                 {
-                                    'name': 'div_per_share',
-                                    'label': 'Div/Share',
-                                    'field': 'div_per_share',
-                                    'align': 'right',
+                                    "name": "date",
+                                    "label": "Date",
+                                    "field": "date",
+                                },
+                                {
+                                    "name": "div_per_share",
+                                    "label": "Div/Share",
+                                    "field": "div_per_share",
+                                    "align": "right",
                                 },
                             ],
                             rows=[],
-                        ).classes('w-full')
-                        income_symbol_history_table.props('pagination={"rowsPerPage":10}')
+                        ).classes("w-full")
+                        income_symbol_history_table.props(
+                            'pagination={"rowsPerPage":10}'
+                        )
 
-                    with ui.column().classes('w-1/2 min-w-0'):
+                    with ui.column().classes("w-1/2 min-w-0"):
                         income_symbol_annual_table = ui.table(
                             columns=[
-                                {'name': 'year', 'label': 'Year', 'field': 'year'},
                                 {
-                                    'name': 'annual_div_per_share',
-                                    'label': 'Annual Div/Share',
-                                    'field': 'annual_div_per_share',
-                                    'align': 'right',
+                                    "name": "year",
+                                    "label": "Year",
+                                    "field": "year",
                                 },
                                 {
-                                    'name': 'annual_income',
-                                    'label': 'Annual Income',
-                                    'field': 'annual_income',
-                                    'align': 'right',
+                                    "name": "annual_div_per_share",
+                                    "label": "Annual Div/Share",
+                                    "field": "annual_div_per_share",
+                                    "align": "right",
+                                },
+                                {
+                                    "name": "annual_income",
+                                    "label": "Annual Income",
+                                    "field": "annual_income",
+                                    "align": "right",
                                 },
                             ],
                             rows=[],
-                        ).classes('w-full')
-                        income_symbol_annual_table.props('pagination={"rowsPerPage":10}')
+                        ).classes("w-full")
+                        income_symbol_annual_table.props(
+                            'pagination={"rowsPerPage":10}'
+                        )
 
                 income_symbol_projection_table = ui.table(
                     columns=[
-                        {'name': 'year', 'label': 'Year', 'field': 'year'},
+                        {"name": "year", "label": "Year", "field": "year"},
                         {
-                            'name': 'bear_income',
-                            'label': 'Bear Income',
-                            'field': 'bear_income',
-                            'align': 'right',
+                            "name": "bear_income",
+                            "label": "Bear Income",
+                            "field": "bear_income",
+                            "align": "right",
                         },
                         {
-                            'name': 'base_income',
-                            'label': 'Base Income',
-                            'field': 'base_income',
-                            'align': 'right',
+                            "name": "base_income",
+                            "label": "Base Income",
+                            "field": "base_income",
+                            "align": "right",
                         },
                         {
-                            'name': 'bull_income',
-                            'label': 'Bull Income',
-                            'field': 'bull_income',
-                            'align': 'right',
+                            "name": "bull_income",
+                            "label": "Bull Income",
+                            "field": "bull_income",
+                            "align": "right",
                         },
                     ],
                     rows=[],
-                ).classes('w-full')
-                income_symbol_projection_table.props('pagination={"rowsPerPage":10}')
+                ).classes("w-full")
+                income_symbol_projection_table.props(
+                    'pagination={"rowsPerPage":10}'
+                )
 
-            with ui.card().classes('w-full'):
-                ui.label('Portfolio Income Projection').classes('text-xl font-semibold')
-                with ui.row().classes('items-center gap-3 w-full'):
-                    ui.label('Accounts:').classes('text-sm font-semibold')
+            with ui.card().classes("w-full"):
+                ui.label("Portfolio Income Projection").classes(
+                    "text-xl font-semibold"
+                )
+                with ui.row().classes("items-center gap-3 w-full"):
+                    ui.label("Accounts:").classes("text-sm font-semibold")
+                    """
                     income_account_checkboxes: dict[str, Any] = {}
                     for account_name in INCOME_ACCOUNT_NAMES:
                         income_account_checkboxes[account_name] = ui.checkbox(
@@ -1752,178 +1820,201 @@ with ui.tab_panels(tabs, value=dashboard_tab).classes('w-full'):
                             value=True,
                             on_change=on_income_account_change,
                         )
+                    """
+                    income_account_checkboxes: dict[str, Any] = {
+                        account_name: ui.checkbox(
+                             account_name,
+                             value=True,
+                             on_change=on_income_account_change,
+                         )
+                        for account_name in INCOME_ACCOUNT_NAMES
+                    }
                 income_portfolio_button = ui.button(
-                    'Refresh Portfolio Income',
+                    "Refresh Portfolio Income",
                     on_click=refresh_portfolio_income_click,
                 )
-                with ui.row().classes('items-center gap-8'):
-                    with ui.column().classes('gap-1'):
-                        ui.label('Next 30 days').classes('text-sm')
-                        income_month_value = ui.label('$0.00').classes('text-lg font-semibold')
-                    with ui.column().classes('gap-1'):
-                        ui.label('Next 90 days').classes('text-sm')
-                        income_quarter_value = ui.label('$0.00').classes('text-lg font-semibold')
-                    with ui.column().classes('gap-1'):
-                        ui.label('Next 12 months').classes('text-sm')
-                        income_year_value = ui.label('$0.00').classes('text-lg font-semibold')
+                with ui.row().classes("items-center gap-8"):
+                    with ui.column().classes("gap-1"):
+                        ui.label("Next 30 days").classes("text-sm")
+                        income_month_value = ui.label("$0.00").classes(
+                            "text-lg font-semibold"
+                        )
+                    with ui.column().classes("gap-1"):
+                        ui.label("Next 90 days").classes("text-sm")
+                        income_quarter_value = ui.label("$0.00").classes(
+                            "text-lg font-semibold"
+                        )
+                    with ui.column().classes("gap-1"):
+                        ui.label("Next 12 months").classes("text-sm")
+                        income_year_value = ui.label("$0.00").classes(
+                            "text-lg font-semibold"
+                        )
 
                 income_events_table = ui.table(
                     columns=[
-                        {'name': 'date', 'label': 'Pay Date', 'field': 'date'},
+                        {"name": "date", "label": "Pay Date", "field": "date"},
                         {
-                            'name': 'days_out',
-                            'label': 'Days Out',
-                            'field': 'days_out',
-                            'align': 'right',
+                            "name": "days_out",
+                            "label": "Days Out",
+                            "field": "days_out",
+                            "align": "right",
                         },
-                        {'name': 'symbol', 'label': 'Symbol', 'field': 'symbol'},
-                        {'name': 'account', 'label': 'Account', 'field': 'account'},
                         {
-                            'name': 'amount',
-                            'label': 'Amount',
-                            'field': 'amount',
-                            'align': 'right',
+                            "name": "symbol",
+                            "label": "Symbol",
+                            "field": "symbol",
+                        },
+                        {
+                            "name": "account",
+                            "label": "Account",
+                            "field": "account",
+                        },
+                        {
+                            "name": "amount",
+                            "label": "Amount",
+                            "field": "amount",
+                            "align": "right",
                         },
                     ],
                     rows=[],
-                ).classes('w-full')
+                ).classes("w-full")
                 income_events_table.props('pagination={"rowsPerPage":12}')
 
     with ui.tab_panel(analysis_tab):
-        with ui.card().classes('w-full'):
-            ui.label('Portfolio Analysis').classes('text-xl font-semibold')
-            with ui.row().classes('items-center gap-2'):
+        with ui.card().classes("w-full"):
+            ui.label("Portfolio Analysis").classes("text-xl font-semibold")
+            with ui.row().classes("items-center gap-2"):
                 analysis_refresh_button = ui.button(
-                    'Rebuild Analysis',
+                    "Rebuild Analysis",
                     on_click=refresh_analysis_snapshot_click,
                 )
-                analysis_status_value = ui.label('No snapshot loaded').classes(
-                    'text-sm'
+                analysis_status_value = ui.label("No snapshot loaded").classes(
+                    "text-sm"
                 )
 
             analysis_question_input = ui.input(
-                'Ask about portfolio data',
-                placeholder='e.g., Which positions have more than 100 shares?',
-            ).classes('w-full')
-            with ui.row().classes('items-center gap-2'):
+                "Ask about portfolio data",
+                placeholder="e.g., Which positions have more than 100 shares?",
+            ).classes("w-full")
+            with ui.row().classes("items-center gap-2"):
                 analysis_provider_select = ui.select(
-                    options=['claude', 'perplexity'],
-                    value='claude',
-                    label='Provider',
+                    options=["claude", "perplexity"],
+                    value="claude",
+                    label="Provider",
                     on_change=on_analysis_provider_change,
-                ).classes('w-40')
+                ).classes("w-40")
                 analysis_model_input = ui.input(
-                    'Model',
-                    value=analysis_default_models['claude'],
-                ).classes('w-64')
+                    "Model",
+                    value=analysis_default_models["claude"],
+                ).classes("w-64")
                 analysis_grounded_toggle = ui.checkbox(
-                    'Grounded only',
+                    "Grounded only",
                     value=True,
                 )
                 analysis_general_mode_toggle = ui.checkbox(
-                    'General assistant mode',
+                    "General assistant mode",
                     value=False,
                 )
 
-            with ui.row().classes('items-center gap-2'):
+            with ui.row().classes("items-center gap-2"):
                 analysis_ask_button = ui.button(
-                    'Ask',
+                    "Ask",
                     on_click=ask_analysis_click,
                 )
                 analysis_llm_button = ui.button(
-                    'Ask LLM',
+                    "Ask LLM",
                     on_click=ask_analysis_llm_click,
                 )
 
-            analysis_answer = ui.textarea(label='Answer')
-            analysis_answer.props('readonly').classes('w-full')
+            analysis_answer = ui.textarea(label="Answer")
+            analysis_answer.props("readonly").classes("w-full")
 
             analysis_columns = [
-                {'name': 'symbol', 'label': 'Symbol', 'field': 'symbol'},
-                {'name': 'account', 'label': 'Account', 'field': 'account'},
-                {'name': 'type', 'label': 'Type', 'field': 'type'},
+                {"name": "symbol", "label": "Symbol", "field": "symbol"},
+                {"name": "account", "label": "Account", "field": "account"},
+                {"name": "type", "label": "Type", "field": "type"},
                 {
-                    'name': 'quantity',
-                    'label': 'Qty',
-                    'field': 'quantity',
-                    'align': 'right',
+                    "name": "quantity",
+                    "label": "Qty",
+                    "field": "quantity",
+                    "align": "right",
                 },
                 {
-                    'name': 'market_value',
-                    'label': 'Mkt Value',
-                    'field': 'market_value',
-                    'align': 'right',
+                    "name": "market_value",
+                    "label": "Mkt Value",
+                    "field": "market_value",
+                    "align": "right",
                 },
-                {'name': 'sector', 'label': 'Sector', 'field': 'sector'},
+                {"name": "sector", "label": "Sector", "field": "sector"},
                 {
-                    'name': 'industry',
-                    'label': 'Industry',
-                    'field': 'industry',
+                    "name": "industry",
+                    "label": "Industry",
+                    "field": "industry",
                 },
             ]
-            with ui.element('div').classes('w-full max-h-[45vh] overflow-auto'):
+            with ui.element("div").classes("w-full max-h-[45vh] overflow-auto"):
                 analysis_rows_table = ui.table(
                     columns=analysis_columns,
                     rows=[],
-                ).classes('w-max min-w-full')
+                ).classes("w-max min-w-full")
             analysis_rows_table.props(
                 'pagination={"rowsPerPage":0} rows-per-page-options="[0]"'
             )
 
-        with ui.card().classes('w-full'):
-            ui.label('Institutional Ownership').classes('text-xl font-semibold')
-            with ui.row().classes('items-center gap-2'):
+        with ui.card().classes("w-full"):
+            ui.label("Institutional Ownership").classes("text-xl font-semibold")
+            with ui.row().classes("items-center gap-2"):
                 inst_ownership_input = ui.input(
-                    'Ticker', placeholder='e.g. AAPL'
-                ).classes('w-32')
+                    "Ticker", placeholder="e.g. AAPL"
+                ).classes("w-32")
                 inst_ownership_button = ui.button(
-                    'Get Ownership', on_click=get_inst_ownership_click
+                    "Get Ownership", on_click=get_inst_ownership_click
                 )
             inst_ownership_columns = [
                 {
-                    'name': 'holder',
-                    'label': 'Institution',
-                    'field': 'holder',
-                    'sortable': True,
+                    "name": "holder",
+                    "label": "Institution",
+                    "field": "holder",
+                    "sortable": True,
                 },
                 {
-                    'name': 'shares',
-                    'label': 'Shares',
-                    'field': 'shares',
-                    'sortable': True,
-                    'align': 'right',
+                    "name": "shares",
+                    "label": "Shares",
+                    "field": "shares",
+                    "sortable": True,
+                    "align": "right",
                 },
                 {
-                    'name': 'pct_out',
-                    'label': '% Owned',
-                    'field': 'pct_out',
-                    'sortable': True,
-                    'align': 'right',
+                    "name": "pct_out",
+                    "label": "% Owned",
+                    "field": "pct_out",
+                    "sortable": True,
+                    "align": "right",
                 },
                 {
-                    'name': 'value',
-                    'label': 'Value ($)',
-                    'field': 'value',
-                    'sortable': True,
-                    'align': 'right',
+                    "name": "value",
+                    "label": "Value ($)",
+                    "field": "value",
+                    "sortable": True,
+                    "align": "right",
                 },
                 {
-                    'name': 'date_reported',
-                    'label': 'Date Reported',
-                    'field': 'date_reported',
-                    'sortable': True,
+                    "name": "date_reported",
+                    "label": "Date Reported",
+                    "field": "date_reported",
+                    "sortable": True,
                 },
             ]
-            with ui.element('div').classes('w-full overflow-auto'):
+            with ui.element("div").classes("w-full overflow-auto"):
                 inst_ownership_table = ui.table(
                     columns=inst_ownership_columns,
                     rows=[],
-                ).classes('w-max min-w-full')
+                ).classes("w-max min-w-full")
             inst_ownership_table.props(
                 'pagination={"rowsPerPage":0} rows-per-page-options="[0]"'
             )
             inst_ownership_table.add_slot(
-                'body-cell-pct_out',
+                "body-cell-pct_out",
                 '<q-td :props="props">{{ props.value }}%</q-td>',
             )
 

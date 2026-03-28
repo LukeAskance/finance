@@ -367,7 +367,7 @@ class PortfolioAnalysisEngine:
             f"{json.dumps(snapshot, indent=2)}\n\n{question}"
             if general_mode
             else f"Portfolio snapshot JSON:\n{json.dumps(snapshot, indent=2)}"
-                 f"\n\nQuestion: {question}"
+            f"\n\nQuestion: {question}"
         )
 
         candidate_models = [
@@ -555,24 +555,34 @@ class PortfolioAnalysisEngine:
 
                 tool_result_content: list[dict] = []
                 for block in content:
-                    if not isinstance(block, dict) or block.get("type") != "tool_use":
+                    if (
+                        not isinstance(block, dict)
+                        or block.get("type") != "tool_use"
+                    ):
                         continue
                     name = block["name"]
                     result = self._execute_tool(name, block.get("input", {}))
                     tool_results[name] = result
-                    tool_result_content.append({
-                        "type": "tool_result",
-                        "tool_use_id": block["id"],
-                        "content": json.dumps(result),
-                    })
+                    tool_result_content.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": block["id"],
+                            "content": json.dumps(result),
+                        }
+                    )
 
-                messages.append({"role": "user", "content": tool_result_content})
+                messages.append(
+                    {"role": "user", "content": tool_result_content}
+                )
 
             if last_error:
                 continue  # try next candidate model
             return "Tool-use loop exceeded maximum iterations.", tool_results
 
-        return last_error or "Claude API call failed: no usable model configured.", tool_results
+        return (
+            last_error or "Claude API call failed: no usable model configured.",
+            tool_results,
+        )
 
     def _call_perplexity(
         self,
