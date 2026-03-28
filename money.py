@@ -18,6 +18,7 @@ import historicals_store
 import options
 import utilities
 from analysis_module import PortfolioAnalysisEngine
+from institutional import get_institutional_ownership
 from positions import load_portfolio_positions
 from schwab_api import SchwabAPI
 
@@ -111,7 +112,7 @@ def _render_historicals_plot(
 
 
 def _render_portfolio_totals_plot(rows: list[dict[str, Any]]) -> None:
-    import matplotlib.pyplot as plt
+    import plotly.graph_objects as go
 
     historicals_totals_plot_host.clear()
     with historicals_totals_plot_host:
@@ -120,19 +121,28 @@ def _render_portfolio_totals_plot(rows: list[dict[str, Any]]) -> None:
                      'Capture a daily snapshot.').classes('text-sm text-orange')
             return
 
-        with ui.pyplot(figsize=(14, 4.5), close=False).classes('w-full'):
-            xs = [datetime.strptime(r['date'], '%Y-%m-%d') for r in rows]
-            ys = [float(r['total_market_value']) for r in rows]
-            plt.plot(xs, ys, marker='o', linewidth=1.6)
-            plt.grid(True, linestyle='--', alpha=0.45)
-            plt.xlabel('UTC Date')
-            plt.ylabel('Portfolio Total ($)')
-            plt.title('Portfolio Total Over Time')
-            plt.tight_layout()
+        xs = [r['date'] for r in rows]
+        ys = [float(r['total_market_value']) for r in rows]
+        fig = go.Figure(go.Scatter(
+            x=xs,
+            y=ys,
+            mode='lines+markers',
+            line={'width': 2},
+            hovertemplate='%{x}<br>$%{y:,.2f}<extra></extra>',
+        ))
+        fig.update_layout(
+            title='Portfolio Total Over Time',
+            xaxis_title='UTC Date',
+            yaxis_title='Portfolio Total ($)',
+            yaxis_tickformat='$,.0f',
+            hovermode='x unified',
+            margin={'l': 60, 'r': 20, 't': 40, 'b': 40},
+        )
+        ui.plotly(fig).classes('w-full')
 
 
 def _render_account_totals_plot(series: dict[str, list[tuple[str, float]]]) -> None:
-    import matplotlib.pyplot as plt
+    import plotly.graph_objects as go
 
     historicals_accounts_plot_host.clear()
     with historicals_accounts_plot_host:
@@ -140,17 +150,26 @@ def _render_account_totals_plot(series: dict[str, list[tuple[str, float]]]) -> N
             ui.label('No account totals yet.').classes('text-sm text-orange')
             return
 
-        with ui.pyplot(figsize=(14, 5), close=False).classes('w-full'):
-            for account, points in series.items():
-                xs = [datetime.strptime(d, '%Y-%m-%d') for d, _ in points]
-                ys = [float(v) for _, v in points]
-                plt.plot(xs, ys, marker='o', linewidth=1.2, label=account)
-            plt.grid(True, linestyle='--', alpha=0.45)
-            plt.xlabel('UTC Date')
-            plt.ylabel('Account Total ($)')
-            plt.title('Account Totals Over Time')
-            plt.legend()
-            plt.tight_layout()
+        fig = go.Figure()
+        for account, points in series.items():
+            xs = [d for d, _ in points]
+            ys = [float(v) for _, v in points]
+            fig.add_trace(go.Scatter(
+                x=xs,
+                y=ys,
+                mode='lines+markers',
+                name=account,
+                hovertemplate=f'{account}<br>%{{x}}<br>$%{{y:,.2f}}<extra></extra>',
+            ))
+        fig.update_layout(
+            title='Account Totals Over Time',
+            xaxis_title='UTC Date',
+            yaxis_title='Account Total ($)',
+            yaxis_tickformat='$,.0f',
+            hovermode='x unified',
+            margin={'l': 60, 'r': 20, 't': 40, 'b': 40},
+        )
+        ui.plotly(fig).classes('w-full')
 
 
 api: SchwabAPI | None = None
@@ -951,7 +970,7 @@ async def ask_analysis_llm_click() -> None:
     analysis_llm_button.disable()
     analysis_llm_button.text = 'Querying LLM...'
     try:
-        answer_text, rows = await asyncio.to_thread(
+        answer_text, rows, tool_results = await asyncio.to_thread(
             analysis_engine.ask_llm,
             question,
             analysis_provider_select.value or 'claude',
@@ -962,11 +981,32 @@ async def ask_analysis_llm_click() -> None:
         analysis_answer.value = answer_text
         analysis_rows_table.rows = rows
         analysis_rows_table.update()
+        if 'get_institutional_ownership' in tool_results:
+            inst_ownership_table.rows = tool_results['get_institutional_ownership']
+            inst_ownership_table.update()
     except Exception as exc:
         analysis_answer.value = f'LLM analysis error: {exc}'
     finally:
         analysis_llm_button.text = 'Ask LLM'
         analysis_llm_button.enable()
+
+
+async def get_inst_ownership_click() -> None:
+    ticker = inst_ownership_input.value.strip().upper()
+    if not ticker:
+        ui.notify('Enter a ticker symbol first', color='warning')
+        return
+    inst_ownership_button.disable()
+    inst_ownership_button.text = 'Fetching...'
+    try:
+        rows = await asyncio.to_thread(get_institutional_ownership, ticker)
+        inst_ownership_table.rows = rows
+        inst_ownership_table.update()
+    except Exception as exc:
+        ui.notify(f'Ownership fetch error: {exc}', color='negative')
+    finally:
+        inst_ownership_button.text = 'Get Ownership'
+        inst_ownership_button.enable()
 
 
 async def plot_historicals_click(silent_if_incomplete: bool = False) -> None:
@@ -1020,11 +1060,6 @@ async def refresh_historical_totals_click() -> None:
         portfolio_rows = payload.get('portfolio_rows', [])
         account_rows = payload.get('account_rows', [])
         account_series = payload.get('account_series', {})
-
-        historicals_portfolio_table.rows = portfolio_rows
-        historicals_portfolio_table.update()
-        historicals_account_table.rows = account_rows
-        historicals_account_table.update()
 
         _render_portfolio_totals_plot(portfolio_rows)
         _render_account_totals_plot(account_series)
@@ -1298,27 +1333,6 @@ def on_income_account_change(_: Any = None) -> None:
     asyncio.create_task(refresh_portfolio_income_click())
 
 # ...existing code...
-
-async def refresh_analysis_snapshot_click() -> None:
-    analysis_refresh_button.disable()
-    analysis_refresh_button.text = 'Rebuilding...'
-    try:
-        positions, _ = await ensure_portfolio_snapshot(force_refresh=False)
-        count = await asyncio.to_thread(
-            analysis_engine.refresh_snapshot_from_positions,
-            positions,
-        )
-        as_of = analysis_engine.as_of.strftime('%Y-%m-%d %H:%M:%S') if analysis_engine.as_of else '-'
-        analysis_status_value.text = f'{count} aggregated positions loaded @ {as_of}'
-        analysis_rows_table.rows = []
-        analysis_rows_table.update()
-        analysis_answer.value = 'Analysis rebuilt from shared portfolio snapshot.'
-    except Exception as exc:
-        analysis_answer.value = f'Analysis refresh error: {exc}'
-    finally:
-        analysis_refresh_button.text = 'Rebuild Analysis'
-        analysis_refresh_button.enable()
-
 
 def on_analysis_provider_change(_: Any = None) -> None:
     provider = (analysis_provider_select.value or 'claude').strip().lower()
@@ -1628,44 +1642,6 @@ with ui.tab_panels(tabs, value=dashboard_tab).classes('w-full'):
                     )
                     historicals_status_value = ui.label('No snapshots yet').classes('text-sm')
 
-                with ui.row().classes('w-full gap-4 items-start no-wrap'):
-                    with ui.column().classes('w-1/2 min-w-0'):
-                        historicals_portfolio_table = ui.table(
-                            columns=[
-                                {'name': 'date', 'label': 'UTC Date', 'field': 'date'},
-                                {
-                                    'name': 'total_market_value',
-                                    'label': 'Portfolio Total',
-                                    'field': 'total_market_value',
-                                    'align': 'right',
-                                },
-                            ],
-                            rows=[],
-                        ).classes('w-full')
-                        historicals_portfolio_table.props('pagination={"rowsPerPage": 10}')
-
-                    with ui.column().classes('w-1/2 min-w-0'):
-                        historicals_account_table = ui.table(
-                            columns=[
-                                {'name': 'date', 'label': 'UTC Date', 'field': 'date'},
-                                {'name': 'account', 'label': 'Account', 'field': 'account'},
-                                {
-                                    'name': 'total_market_value',
-                                    'label': 'Account Total',
-                                    'field': 'total_market_value',
-                                    'align': 'right',
-                                },
-                                {
-                                    'name': 'cash_balance',
-                                    'label': 'Cash',
-                                    'field': 'cash_balance',
-                                    'align': 'right',
-                                },
-                            ],
-                            rows=[],
-                        ).classes('w-full')
-                        historicals_account_table.props('pagination={"rowsPerPage": 10}')
-
                 historicals_totals_plot_host = ui.column().classes('w-full')
                 historicals_accounts_plot_host = ui.column().classes('w-full')
 
@@ -1892,6 +1868,63 @@ with ui.tab_panels(tabs, value=dashboard_tab).classes('w-full'):
                 ).classes('w-max min-w-full')
             analysis_rows_table.props(
                 'pagination={"rowsPerPage":0} rows-per-page-options="[0]"'
+            )
+
+        with ui.card().classes('w-full'):
+            ui.label('Institutional Ownership').classes('text-xl font-semibold')
+            with ui.row().classes('items-center gap-2'):
+                inst_ownership_input = ui.input(
+                    'Ticker', placeholder='e.g. AAPL'
+                ).classes('w-32')
+                inst_ownership_button = ui.button(
+                    'Get Ownership', on_click=get_inst_ownership_click
+                )
+            inst_ownership_columns = [
+                {
+                    'name': 'holder',
+                    'label': 'Institution',
+                    'field': 'holder',
+                    'sortable': True,
+                },
+                {
+                    'name': 'shares',
+                    'label': 'Shares',
+                    'field': 'shares',
+                    'sortable': True,
+                    'align': 'right',
+                },
+                {
+                    'name': 'pct_out',
+                    'label': '% Owned',
+                    'field': 'pct_out',
+                    'sortable': True,
+                    'align': 'right',
+                },
+                {
+                    'name': 'value',
+                    'label': 'Value ($)',
+                    'field': 'value',
+                    'sortable': True,
+                    'align': 'right',
+                },
+                {
+                    'name': 'date_reported',
+                    'label': 'Date Reported',
+                    'field': 'date_reported',
+                    'sortable': True,
+                },
+            ]
+            with ui.element('div').classes('w-full overflow-auto'):
+                inst_ownership_table = ui.table(
+                    columns=inst_ownership_columns,
+                    rows=[],
+                ).classes('w-max min-w-full')
+            inst_ownership_table.props(
+                'pagination={"rowsPerPage":0} rows-per-page-options="[0]"'
+            )
+            inst_ownership_table.add_slot(
+                'body-cell-pct_out',
+                '<q-td :props="props">{{ props.value }}%</q-td>',
             )
 
 

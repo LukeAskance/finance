@@ -11,7 +11,34 @@ from urllib import request as urlrequest
 
 import yfinance as yf
 
+from institutional import get_institutional_ownership
 from positions import load_portfolio_positions
+
+
+# ---------------------------------------------------------------------------
+# Tool definitions exposed to the Claude tool-use API
+# ---------------------------------------------------------------------------
+_CLAUDE_TOOLS: list[dict] = [
+    {
+        "name": "get_institutional_ownership",
+        "description": (
+            "Get the top 10 institutional holders for a stock ticker, sorted by "
+            "percentage of shares outstanding. Use this when the user asks about "
+            "who owns a stock, institutional holders, major shareholders, or fund "
+            "ownership of any company."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {
+                    "type": "string",
+                    "description": "The stock ticker symbol, e.g. 'AAPL' or 'MSFT'.",
+                }
+            },
+            "required": ["ticker"],
+        },
+    }
+]
 
 
 @dataclass(slots=True)
@@ -336,9 +363,11 @@ class PortfolioAnalysisEngine:
             )
 
         user_text = (
-            f"Here is my current portfolio for reference:\n{json.dumps(snapshot, indent=2)}\n\n{question}"
+            f"Here is my current portfolio for reference:\n"
+            f"{json.dumps(snapshot, indent=2)}\n\n{question}"
             if general_mode
-            else f"Portfolio snapshot JSON:\n{json.dumps(snapshot, indent=2)}\n\nQuestion: {question}"
+            else f"Portfolio snapshot JSON:\n{json.dumps(snapshot, indent=2)}"
+                 f"\n\nQuestion: {question}"
         )
 
         candidate_models = [
@@ -399,6 +428,151 @@ class PortfolioAnalysisEngine:
         return (
             last_error or "Claude API call failed: no usable model configured."
         )
+
+    # ------------------------------------------------------------------
+    # Tool execution
+    # ------------------------------------------------------------------
+
+    def _execute_tool(self, name: str, tool_input: dict) -> Any:
+        if name == "get_institutional_ownership":
+            return get_institutional_ownership(tool_input.get("ticker", ""))
+        return {"error": f"Unknown tool: {name}"}
+
+    # ------------------------------------------------------------------
+    # Claude with tool-use (multi-turn loop)
+    # ------------------------------------------------------------------
+
+    def _call_claude_with_tools(
+        self,
+        question: str,
+        model: str,
+        grounded_only: bool,
+        general_mode: bool = False,
+    ) -> tuple[str, dict[str, Any]]:
+        """Call Claude with tool-use support.
+
+        Returns (answer_text, tool_results) where tool_results maps
+        tool name → raw result data (e.g. {"get_institutional_ownership": [...]}).
+        """
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            return "Missing ANTHROPIC_API_KEY in environment.", {}
+
+        snapshot = self._snapshot_payload()
+
+        if general_mode:
+            system = (
+                "You are a helpful assistant. You have access to the user's "
+                "portfolio data for context when relevant. "
+                "Be concise and include concrete symbols/values when available."
+            )
+        else:
+            grounding = (
+                "Answer ONLY using the provided portfolio snapshot data and any "
+                "tool results. If the answer is not available, say so explicitly."
+                if grounded_only
+                else "You may answer generally, but prioritize the provided "
+                "portfolio snapshot and any tool results when relevant."
+            )
+            system = (
+                "You are a portfolio analysis assistant. "
+                f"{grounding} "
+                "Be concise and include concrete symbols/values when available."
+            )
+
+        user_text = (
+            f"Here is my current portfolio for reference:\n"
+            f"{json.dumps(snapshot, indent=2)}\n\n{question}"
+            if general_mode
+            else f"Portfolio snapshot JSON:\n"
+            f"{json.dumps(snapshot, indent=2)}\n\nQuestion: {question}"
+        )
+
+        candidate_models = [model.strip(), "claude-sonnet-4-20250514"]
+        unique_models: list[str] = []
+        for m in candidate_models:
+            if m and m not in unique_models:
+                unique_models.append(m)
+
+        last_error = ""
+        headers = {
+            "content-type": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+        }
+
+        tool_results: dict[str, Any] = {}
+        messages: list[dict] = [{"role": "user", "content": user_text}]
+
+        for candidate in unique_models:
+            messages = [{"role": "user", "content": user_text}]
+            tool_results = {}
+            last_error = ""
+
+            # Tool-use loop — at most 5 round-trips
+            for _ in range(5):
+                payload = {
+                    "model": candidate,
+                    "max_tokens": 1500,
+                    "system": system,
+                    "messages": messages,
+                    "tools": _CLAUDE_TOOLS,
+                }
+                req = urlrequest.Request(
+                    url="https://api.anthropic.com/v1/messages",
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers=headers,
+                    method="POST",
+                )
+                try:
+                    with urlrequest.urlopen(req, timeout=60) as response:
+                        body = json.loads(response.read().decode("utf-8"))
+                except urlerror.HTTPError as exc:
+                    detail = exc.read().decode("utf-8", errors="ignore")
+                    last_error = f"Claude API error ({exc.code}): {detail}"
+                    if exc.code == 404 and "model" in detail.lower():
+                        break  # try next candidate model
+                    return last_error, tool_results
+                except Exception as exc:
+                    return f"Claude API call failed: {exc}", tool_results
+
+                stop_reason = body.get("stop_reason")
+                content = body.get("content", [])
+
+                if stop_reason != "tool_use":
+                    # Final text response
+                    for item in content:
+                        if (
+                            isinstance(item, dict)
+                            and item.get("type") == "text"
+                            and item.get("text")
+                        ):
+                            return str(item["text"]), tool_results
+                    return str(body), tool_results
+
+                # Claude wants to call a tool
+                messages.append({"role": "assistant", "content": content})
+
+                tool_result_content: list[dict] = []
+                for block in content:
+                    if not isinstance(block, dict) or block.get("type") != "tool_use":
+                        continue
+                    name = block["name"]
+                    result = self._execute_tool(name, block.get("input", {}))
+                    tool_results[name] = result
+                    tool_result_content.append({
+                        "type": "tool_result",
+                        "tool_use_id": block["id"],
+                        "content": json.dumps(result),
+                    })
+
+                messages.append({"role": "user", "content": tool_result_content})
+
+            if last_error:
+                continue  # try next candidate model
+            return "Tool-use loop exceeded maximum iterations.", tool_results
+
+        return last_error or "Claude API call failed: no usable model configured.", tool_results
 
     def _call_perplexity(
         self,
@@ -478,14 +652,15 @@ class PortfolioAnalysisEngine:
         model: str = "",
         grounded_only: bool = True,
         general_mode: bool = False,
-    ) -> tuple[str, list[dict[str, Any]]]:
+    ) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
         q = question.strip()
         if not q:
-            return "Enter a question.", []
+            return "Enter a question.", [], {}
 
         if not self._snapshot:
-            return "Load a portfolio snapshot first.", []
+            return "Load a portfolio snapshot first.", [], {}
 
+        tool_results: dict[str, Any] = {}
         provider_key = provider.strip().lower()
         if provider_key == "perplexity":
             use_model = model.strip() or "sonar"
@@ -494,12 +669,12 @@ class PortfolioAnalysisEngine:
             )
         else:
             use_model = model.strip() or "claude-sonnet-4-20250514"
-            answer = self._call_claude(
+            answer, tool_results = self._call_claude_with_tools(
                 q, use_model, grounded_only, general_mode
             )
 
         evidence_rows = self._rows(self._snapshot[:40]) if grounded_only else []
-        return answer, evidence_rows
+        return answer, evidence_rows, tool_results
 
     def answer_question(
         self, question: str
