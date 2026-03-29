@@ -18,6 +18,7 @@ import historicals_store
 import options
 import utilities
 from analysis_module import PortfolioAnalysisEngine
+from financials import get_financials, get_insider_transactions
 from institutional import get_institutional_ownership
 from positions import load_portfolio_positions
 from schwab_api import SchwabAPI
@@ -1009,6 +1010,37 @@ async def ask_analysis_llm_click() -> None:
         analysis_llm_button.enable()
 
 
+async def get_financials_click() -> None:
+    ticker = financials_input.value.strip().upper()
+    if not ticker:
+        ui.notify("Enter a ticker symbol first", color="warning")
+        return
+    financials_button.disable()
+    financials_button.text = "Fetching..."
+    try:
+        f, ins = await asyncio.gather(
+            asyncio.to_thread(get_financials, ticker),
+            asyncio.to_thread(get_insider_transactions, ticker),
+        )
+        financials_price.value = f"${f.price:.2f}" if f.price is not None else "—"
+        financials_eps.value = f"${f.eps:.2f}" if f.eps is not None else "—"
+        financials_yield.value = f"{f.dividend_yield_pct:.2f}%" if f.dividend_yield_pct is not None else "—"
+        financials_pe.value = str(f.pe_ratio) if f.pe_ratio is not None else "—"
+        if f.cash_per_share is not None:
+            financials_cash_per_share.value = f"${f.cash_per_share:.2f}"
+        else:
+            financials_cash_per_share.value = "—"
+            ui.notify(f"Cash/share unavailable: {f.cash_per_share_error}", color="warning")
+        financials_ins_buys.value = f"{ins.buys} / {ins.buys_shares:,}"
+        financials_ins_sells.value = f"{ins.sells} / {ins.sells_shares:,}"
+        financials_ins_10b51.value = f"{ins.sells_10b51} / {ins.sells_10b51_shares:,}"
+    except Exception as exc:
+        ui.notify(f"Financials fetch error: {exc}", color="negative")
+    finally:
+        financials_button.text = "Fetch"
+        financials_button.enable()
+
+
 async def get_inst_ownership_click() -> None:
     ticker = inst_ownership_input.value.strip().upper()
     if not ticker:
@@ -1973,6 +2005,41 @@ with ui.tab_panels(tabs, value=dashboard_tab).classes("w-full"):
             analysis_rows_table.props(
                 'pagination={"rowsPerPage":0} rows-per-page-options="[0]"'
             )
+
+        with ui.card().classes("w-full"):
+            ui.label("Financials").classes("text-xl font-semibold")
+            with ui.row().classes("items-center gap-2"):
+                financials_input = ui.input(
+                    "Ticker", placeholder="e.g. AAPL"
+                ).classes("w-32")
+                financials_button = ui.button(
+                    "Fetch", on_click=get_financials_click
+                )
+            with ui.row().classes("items-center gap-4 mt-1 flex-wrap"):
+                with ui.column().classes("gap-0"):
+                    ui.label("Price").classes("text-xs text-gray-400")
+                    financials_price = ui.input(value="—").props("readonly").classes("w-24")
+                with ui.column().classes("gap-0"):
+                    ui.label("EPS").classes("text-xs text-gray-400")
+                    financials_eps = ui.input(value="—").props("readonly").classes("w-20")
+                with ui.column().classes("gap-0"):
+                    ui.label("Yield%").classes("text-xs text-gray-400")
+                    financials_yield = ui.input(value="—").props("readonly").classes("w-20")
+                with ui.column().classes("gap-0"):
+                    ui.label("P/E").classes("text-xs text-gray-400")
+                    financials_pe = ui.input(value="—").props("readonly").classes("w-20")
+                with ui.column().classes("gap-0"):
+                    ui.label("Cash/Share").classes("text-xs text-gray-400")
+                    financials_cash_per_share = ui.input(value="—").props("readonly").classes("w-24")
+                with ui.column().classes("gap-0"):
+                    ui.label("Ins Buys (txns/sh)").classes("text-xs text-gray-400")
+                    financials_ins_buys = ui.input(value="—").props("readonly").classes("w-32")
+                with ui.column().classes("gap-0"):
+                    ui.label("Ins Sells (txns/sh)").classes("text-xs text-gray-400")
+                    financials_ins_sells = ui.input(value="—").props("readonly").classes("w-32")
+                with ui.column().classes("gap-0"):
+                    ui.label("10b5-1 Sells (txns/sh)").classes("text-xs text-gray-400")
+                    financials_ins_10b51 = ui.input(value="—").props("readonly").classes("w-36")
 
         with ui.card().classes("w-full"):
             ui.label("Institutional Ownership").classes("text-xl font-semibold")
