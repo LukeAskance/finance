@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "portfolio": {
+      "command": "/Users/george/code/money/.venv/bin/python",
+      "args": ["/Users/george/code/money/portfolio_mcp.py"]
+    }
+  }
+}

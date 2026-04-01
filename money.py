@@ -1406,6 +1406,336 @@ def on_analysis_provider_change(_: Any = None) -> None:
     analysis_model_input.value = default_model
 
 
+# ---------------------------------------------------------------------------
+# MCP tab — tool definitions and chat handler
+# ---------------------------------------------------------------------------
+
+# Tool schemas exposed to Claude (mirrors portfolio_mcp.py tools)
+_MCP_TOOLS: list[dict] = [
+    {
+        "name": "get_portfolio_positions",
+        "description": "Return all positions from the most-recent portfolio snapshot in the local database, aggregated across accounts and sorted by market value.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "min_market_value": {"type": "number", "description": "Only include positions with market value >= this amount. Default 0."},
+                "instrument_type": {"type": "string", "description": "Filter by type: 'equity', 'fund', 'cash', 'option'. Leave blank for all."},
+            },
+        },
+    },
+    {
+        "name": "get_positions_by_account",
+        "description": "Return positions broken out per account from the most-recent snapshot.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account_name": {"type": "string", "description": "Partial account name to filter by (case-insensitive). Leave blank for all accounts."},
+            },
+        },
+    },
+    {
+        "name": "get_portfolio_totals",
+        "description": "Return daily total portfolio market value over the past N days.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "days": {"type": "integer", "description": "Number of calendar days of history. Default 90."},
+            },
+        },
+    },
+    {
+        "name": "get_account_totals",
+        "description": "Return daily market value per account over the past N days.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "days": {"type": "integer", "description": "Number of calendar days of history. Default 30."},
+            },
+        },
+    },
+    {
+        "name": "get_financials",
+        "description": "Return key financial metrics for a ticker: price, EPS, dividend yield%, P/E ratio, and cash-per-share from SEC EDGAR.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Stock ticker symbol, e.g. 'AAPL'."},
+            },
+            "required": ["ticker"],
+        },
+    },
+    {
+        "name": "get_insider_activity",
+        "description": "Return insider buy/sell/10b5-1 plan transaction summary for a ticker from SEC EDGAR Form 4 filings.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Stock ticker symbol."},
+                "lookback_days": {"type": "integer", "description": "Days of history to scan. Default 365."},
+            },
+            "required": ["ticker"],
+        },
+    },
+    {
+        "name": "get_institutional_holders",
+        "description": "Return the top institutional holders for a ticker (% of shares outstanding).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Stock ticker symbol."},
+            },
+            "required": ["ticker"],
+        },
+    },
+    {
+        "name": "get_dividend_forecast",
+        "description": "Return a bear/base/bull dividend income forecast for a position using SEC EDGAR dividend history.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Stock ticker symbol."},
+                "shares": {"type": "number", "description": "Number of shares held."},
+                "years": {"type": "integer", "description": "Forecast horizon in years. Default 3."},
+            },
+            "required": ["ticker", "shares"],
+        },
+    },
+    {
+        "name": "get_price_history",
+        "description": "Return recent closing price history for a ticker from yfinance.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Stock ticker symbol."},
+                "days": {"type": "integer", "description": "Number of calendar days of history. Default 90."},
+            },
+            "required": ["ticker"],
+        },
+    },
+]
+
+
+def _mcp_execute_tool(name: str, tool_input: dict) -> Any:
+    """Dispatch a tool call to the matching portfolio_mcp function."""
+    import portfolio_mcp as _mcp
+    fn = getattr(_mcp, name, None)
+    if fn is None:
+        return {"error": f"Unknown tool: {name}"}
+    return fn(**tool_input)
+
+
+_mcp_history: list[dict] = []  # conversation history for the MCP chat tab
+
+
+async def mcp_send_click() -> None:
+    user_text = mcp_input.value.strip()
+    if not user_text:
+        return
+
+    provider = mcp_provider_select.value or "claude"
+    if provider == "perplexity":
+        api_key = os.getenv("PERPLEXITY_API_KEY")
+        if not api_key:
+            ui.notify("PERPLEXITY_API_KEY not set", color="negative")
+            return
+    else:
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            ui.notify("ANTHROPIC_API_KEY not set", color="negative")
+            return
+
+    mcp_input.value = ""
+    with mcp_chat_column:
+        ui.chat_message(text=user_text, name="You", sent=True).classes("w-full")
+    mcp_send_button.disable()
+    mcp_send_button.text = "..."
+
+    _mcp_history.append({"role": "user", "content": user_text})
+
+    try:
+        if provider == "perplexity":
+            model = mcp_model_input.value.strip() or "sonar"
+            answer = await asyncio.to_thread(
+                _mcp_call_perplexity, list(_mcp_history), api_key, model
+            )
+        else:
+            model = mcp_model_input.value.strip() or "claude-sonnet-4-6"
+            answer = await asyncio.to_thread(_mcp_call_claude, list(_mcp_history), api_key, model)
+        _mcp_history.append({"role": "assistant", "content": answer})
+        with mcp_chat_column:
+            ui.chat_message(text=answer, name="Assistant", sent=False).classes("w-full")
+    except Exception as exc:
+        ui.notify(f"MCP chat error: {exc}", color="negative")
+    finally:
+        mcp_send_button.text = "Send"
+        mcp_send_button.enable()
+
+
+_MCP_SYSTEM = (
+    "You are a portfolio assistant with access to live portfolio and market data tools. "
+    "Use the tools to answer questions accurately. When looking up data for multiple "
+    "tickers, call the tools in sequence. Be concise and include concrete numbers."
+)
+
+
+def _mcp_call_claude(messages: list[dict], api_key: str, model: str = "claude-sonnet-4-6") -> str:
+    """Synchronous Claude tool-use loop."""
+    import urllib.error as urlerror
+    import urllib.request as urlrequest
+
+    headers = {
+        "content-type": "application/json",
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+    }
+    local_messages = list(messages)
+
+    for _ in range(10):
+        payload = {
+            "model": model,
+            "max_tokens": 2048,
+            "system": _MCP_SYSTEM,
+            "messages": local_messages,
+            "tools": _MCP_TOOLS,
+        }
+        req = urlrequest.Request(
+            url="https://api.anthropic.com/v1/messages",
+            data=json.dumps(payload).encode(),
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with urlrequest.urlopen(req, timeout=60) as resp:
+                body = json.loads(resp.read().decode())
+        except urlerror.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="ignore")
+            raise RuntimeError(f"Claude API error ({exc.code}): {detail}") from exc
+
+        stop_reason = body.get("stop_reason")
+        content = body.get("content", [])
+
+        if stop_reason != "tool_use":
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    return str(block.get("text", ""))
+            return str(body)
+
+        local_messages.append({"role": "assistant", "content": content})
+        tool_results = []
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_use":
+                continue
+            result = _mcp_execute_tool(block["name"], block.get("input", {}))
+            tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": block["id"],
+                "content": json.dumps(result),
+            })
+        local_messages.append({"role": "user", "content": tool_results})
+
+    return "Tool-use loop exceeded maximum iterations."
+
+
+def _mcp_call_perplexity(messages: list[dict], api_key: str, model: str) -> str:
+    """Perplexity doesn't support tool use, so Claude gathers the data first,
+    then Perplexity receives the question + tool results as plain context."""
+    import urllib.error as urlerror
+    import urllib.request as urlrequest
+
+    anthropic_key = os.getenv("ANTHROPIC_API_KEY")
+    tool_context = ""
+    if anthropic_key:
+        # Use Claude to run the tool-use loop and collect results
+        claude_headers = {
+            "content-type": "application/json",
+            "x-api-key": anthropic_key,
+            "anthropic-version": "2023-06-01",
+        }
+        local_messages = list(messages)
+        tool_summaries: list[str] = []
+
+        for _ in range(10):
+            payload = {
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 512,
+                "system": (
+                    "You are a data-gathering assistant. Call whatever tools are needed "
+                    "to collect the data required to answer the user's question. "
+                    "Do not write a final answer — just gather the data."
+                ),
+                "messages": local_messages,
+                "tools": _MCP_TOOLS,
+            }
+            req = urlrequest.Request(
+                url="https://api.anthropic.com/v1/messages",
+                data=json.dumps(payload).encode(),
+                headers=claude_headers,
+                method="POST",
+            )
+            try:
+                with urlrequest.urlopen(req, timeout=60) as resp:
+                    body = json.loads(resp.read().decode())
+            except Exception:
+                break
+
+            stop_reason = body.get("stop_reason")
+            content = body.get("content", [])
+            if stop_reason != "tool_use":
+                break
+
+            local_messages.append({"role": "assistant", "content": content})
+            tool_results = []
+            for block in content:
+                if not isinstance(block, dict) or block.get("type") != "tool_use":
+                    continue
+                result = _mcp_execute_tool(block["name"], block.get("input", {}))
+                tool_summaries.append(
+                    f"[{block['name']}({block.get('input', {})})] → {json.dumps(result)}"
+                )
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block["id"],
+                    "content": json.dumps(result),
+                })
+            local_messages.append({"role": "user", "content": tool_results})
+
+        if tool_summaries:
+            tool_context = "\n\nLive data gathered from portfolio tools:\n" + "\n".join(tool_summaries)
+
+    # Build the user question (last message in history)
+    question = next(
+        (m["content"] for m in reversed(messages) if m["role"] == "user"), ""
+    )
+
+    perp_payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": _MCP_SYSTEM + tool_context},
+            {"role": "user", "content": question},
+        ],
+        "temperature": 0.1,
+    }
+    req = urlrequest.Request(
+        url="https://api.perplexity.ai/chat/completions",
+        data=json.dumps(perp_payload).encode(),
+        headers={
+            "content-type": "application/json",
+            "authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+    try:
+        with urlrequest.urlopen(req, timeout=60) as resp:
+            body = json.loads(resp.read().decode())
+            choices = body.get("choices") or []
+            if choices:
+                return str(choices[0].get("message", {}).get("content", ""))
+            return str(body)
+    except urlerror.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(f"Perplexity API error ({exc.code}): {detail}") from exc
+
+
 with ui.tabs().classes("w-full") as tabs:
     dashboard_tab = ui.tab("Dashboard")
     portfolio_tab = ui.tab("Portfolio")
@@ -1413,6 +1743,7 @@ with ui.tabs().classes("w-full") as tabs:
     historicals_tab = ui.tab("Historicals")
     income_tab = ui.tab("Income")
     analysis_tab = ui.tab("Analysis")
+    mcp_tab = ui.tab("MCP")
 
 with ui.tab_panels(tabs, value=dashboard_tab).classes("w-full"):
     with ui.tab_panel(dashboard_tab):
@@ -2097,6 +2428,43 @@ with ui.tab_panels(tabs, value=dashboard_tab).classes("w-full"):
                 "body-cell-pct_out",
                 '<q-td :props="props">{{ props.value }}%</q-td>',
             )
+
+
+    with ui.tab_panel(mcp_tab):
+        with ui.card().classes("w-full"):
+            ui.label("MCP Portfolio Chat").classes("text-xl font-semibold")
+            ui.label(
+                "Ask anything — Claude will call live portfolio and market data tools to answer."
+            ).classes("text-sm text-gray-400")
+            ui.button(
+                "Clear conversation",
+                on_click=lambda: (mcp_chat_column.clear(), _mcp_history.clear()),
+            ).props("flat dense")
+
+        with ui.card().classes("w-full flex-1"):
+            mcp_chat_column = ui.column().classes("w-full gap-2")
+
+        with ui.card().classes("w-full"):
+            with ui.row().classes("w-full items-center gap-2"):
+                mcp_provider_select = ui.select(
+                    options=["claude", "perplexity"],
+                    value="claude",
+                    label="Provider",
+                    on_change=lambda _: mcp_model_input.__setattr__(
+                        "value",
+                        "sonar" if mcp_provider_select.value == "perplexity" else "claude-sonnet-4-6",
+                    ),
+                ).classes("w-36")
+                mcp_model_input = ui.input(
+                    "Model", value="claude-sonnet-4-6"
+                ).classes("w-56")
+            with ui.row().classes("w-full items-center gap-2 mt-1"):
+                mcp_input = ui.input(
+                    placeholder="e.g. What are my top 5 positions and insider activity for each?",
+                ).classes("flex-1").on(
+                    "keydown.enter", mcp_send_click
+                )
+                mcp_send_button = ui.button("Send", on_click=mcp_send_click)
 
 
 ui.run(port=8000, reload=False)

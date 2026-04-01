@@ -344,7 +344,7 @@ class PortfolioAnalysisEngine:
 
         if general_mode:
             system = (
-                "You are a helpful assistant. You have access to the user's "
+                "You are a helpful financially awareassistant. You have access to the user's "
                 "portfolio data for context when relevant. "
                 "Be concise and include concrete symbols/values when available."
             )
