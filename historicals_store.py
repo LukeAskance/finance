@@ -332,6 +332,24 @@ def capture_snapshot_from_positions(api: Any, snapshot_utc_date: date | None = N
     return capture_snapshot_from_loaded_positions(list(positions), snapshot_utc_date)
 
 
+def get_latest_portfolio_total() -> tuple[str, float] | None:
+    """Return (date_iso, total_market_value) for the most recent snapshot date in the DB, or None."""
+    with session_scope() as session:
+        row = session.execute(
+            select(
+                DailyAccountSnapshot.date,
+                func.sum(DailyAccountSnapshot.total_market_value),
+            )
+            .group_by(DailyAccountSnapshot.date)
+            .order_by(DailyAccountSnapshot.date.desc())
+            .limit(1)
+        ).one_or_none()
+    if row is None:
+        return None
+    d, total = row
+    return d.isoformat(), round(float(total or 0.0), 2)
+
+
 def get_totals_payload(days: int = 365) -> dict[str, Any]:
     start_date = datetime.now(timezone.utc).date() - timedelta(days=max(1, int(days)) - 1)
 

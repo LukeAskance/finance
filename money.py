@@ -308,6 +308,26 @@ async def refresh_portfolio_snapshot_click() -> None:
         if analysis_ans is not None:
             analysis_ans.value = "Shared portfolio snapshot refreshed."
 
+        # Portfolio value summary
+        live_total = sum(float(r.get("market_value", 0.0)) for r in rows)
+        portfolio_live_value.text = f"${live_total:,.2f}"
+
+        prev = await asyncio.to_thread(historicals_store.get_latest_portfolio_total)
+        if prev:
+            prev_date, prev_total = prev
+            delta = live_total - prev_total
+            pct = (delta / prev_total * 100) if prev_total else 0.0
+            sign = "+" if delta >= 0 else ""
+            portfolio_prev_value.text = f"${prev_total:,.2f} ({prev_date})"
+            portfolio_change_value.text = f"{sign}${delta:,.2f} ({sign}{pct:.2f}%)"
+            portfolio_change_value.classes(
+                remove="text-green-400 text-red-400",
+                add="text-green-400" if delta >= 0 else "text-red-400",
+            )
+        else:
+            portfolio_prev_value.text = "no snapshot in DB"
+            portfolio_change_value.text = "—"
+
         portfolio_snapshot_status_value.text = (
             f"Refresh successful: {len(positions)} positions, "
             f"{len(rows)} rows @ "
@@ -348,6 +368,16 @@ with ui.tab_panels(tabs, value=dashboard_tab).classes("w-full"):
                 vix_label = ui.label("…").classes("text-lg")
                 ui.label("S&P 500:").classes("font-semibold ml-4")
                 sp500_label = ui.label("…").classes("text-lg")
+            with ui.row().classes("items-center gap-6 mt-1"):
+                with ui.column().classes("gap-0"):
+                    ui.label("Portfolio (live)").classes("text-xs text-gray-400")
+                    portfolio_live_value = ui.label("—").classes("text-lg font-semibold")
+                with ui.column().classes("gap-0"):
+                    ui.label("Previous snapshot").classes("text-xs text-gray-400")
+                    portfolio_prev_value = ui.label("—").classes("text-lg")
+                with ui.column().classes("gap-0"):
+                    ui.label("Change").classes("text-xs text-gray-400")
+                    portfolio_change_value = ui.label("—").classes("text-lg")
             with ui.row().classes("items-center gap-3"):
                 refresh_portfolio_snapshot_button = ui.button(
                     "Refresh Portfolio Snapshot",
