@@ -21,6 +21,7 @@ from positions import load_portfolio_positions
 from schwab_api import SchwabAPI
 
 import tabs.analysis_tab as analysis_tab_mod
+import tabs.fred_tab as fred_tab_mod
 import tabs.historicals_tab as historicals_tab_mod
 import tabs.income_tab as income_tab_mod
 import tabs.mcp_tab as mcp_tab_mod
@@ -360,6 +361,7 @@ with ui.tabs().classes("w-full") as tabs:
     historicals_tab = ui.tab("Historicals")
     income_tab = ui.tab("Income")
     analysis_tab = ui.tab("Analysis")
+    fred_tab = ui.tab("Fred")
     mcp_tab = ui.tab("MCP")
 
 with ui.tab_panels(tabs, value=dashboard_tab).classes("w-full"):
@@ -429,6 +431,8 @@ with ui.tab_panels(tabs, value=dashboard_tab).classes("w-full"):
             ensure_portfolio_snapshot,
         )
     )
+
+    fred_tab_mod.build(fred_tab)
 
     mcp_tab_mod.build(mcp_tab)
 
