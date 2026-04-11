@@ -27,12 +27,13 @@ import tabs.mcp_tab as mcp_tab_mod
 import tabs.options_tab as options_tab_mod
 import tabs.portfolio_tab as portfolio_tab_mod
 
+
 try:
     from dividend_prediction import DividendForecaster
 
     _dividend_prediction_import_error = None
 except ImportError as exc:
-    DividendForecaster = None
+    DividendForecaster = None  # type: ignore[assignment]
     _dividend_prediction_import_error = exc
 
 try:
@@ -142,6 +143,7 @@ def fetch_chain(symbol: str, contract_type: str) -> dict[str, Any]:
 # Portfolio snapshot helpers
 # ---------------------------------------------------------------------------
 
+
 def _pe_ratio_for_row(p: Any) -> Any:
     if p.position_type in {"CALL", "PUT", "OPTION", "Cash"}:
         return "--"
@@ -187,7 +189,8 @@ def _build_portfolio_rows_from_positions(
 async def ensure_portfolio_snapshot(
     force_refresh: bool = False,
 ) -> tuple[list[Any], list[dict[str, Any]]]:
-    global portfolio_snapshot_positions, portfolio_snapshot_rows, portfolio_snapshot_as_of
+    global portfolio_snapshot_positions, portfolio_snapshot_rows
+    global portfolio_snapshot_as_of
 
     if portfolio_snapshot_positions and not force_refresh:
         return portfolio_snapshot_positions, portfolio_snapshot_rows
@@ -371,7 +374,9 @@ with ui.tab_panels(tabs, value=dashboard_tab).classes("w-full"):
             with ui.row().classes("items-center gap-6 mt-1"):
                 with ui.column().classes("gap-0"):
                     ui.label("Portfolio (live)").classes("text-xs text-gray-400")
-                    portfolio_live_value = ui.label("—").classes("text-lg font-semibold")
+                    portfolio_live_value = ui.label("—").classes(
+                        "text-lg font-semibold"
+                    )
                 with ui.column().classes("gap-0"):
                     ui.label("Previous snapshot").classes("text-xs text-gray-400")
                     portfolio_prev_value = ui.label("—").classes("text-lg")
