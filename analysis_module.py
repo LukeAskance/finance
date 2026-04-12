@@ -37,7 +37,26 @@ _CLAUDE_TOOLS: list[dict] = [
             },
             "required": ["ticker"],
         },
-    }
+    },
+    {
+        "name": "get_market_cap",
+        "description": (
+            "Get the current market capitalisation for a stock ticker. "
+            "Use this when the user asks about market cap, company size, "
+            "large-cap vs small-cap classification, or wants to compare "
+            "the size of companies in the portfolio."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {
+                    "type": "string",
+                    "description": "The stock ticker symbol, e.g. 'AAPL' or 'WPC'.",
+                }
+            },
+            "required": ["ticker"],
+        },
+    },
 ]
 
 
@@ -436,6 +455,24 @@ class PortfolioAnalysisEngine:
     def _execute_tool(self, name: str, tool_input: dict) -> Any:
         if name == "get_institutional_ownership":
             return get_institutional_ownership(tool_input.get("ticker", ""))
+        if name == "get_market_cap":
+            import datetime
+            ticker = tool_input.get("ticker", "").upper()
+            info = yf.Ticker(ticker).info
+            if not (market_cap := info.get("marketCap")):
+                return {"error": f"No market cap data available for {ticker}"}
+            if market_cap >= 1_000_000_000_000:
+                market_cap_str = f"${market_cap / 1_000_000_000_000:.2f}T"
+            elif market_cap >= 1_000_000_000:
+                market_cap_str = f"${market_cap / 1_000_000_000:.2f}B"
+            else:
+                market_cap_str = f"${market_cap / 1_000_000:.2f}M"
+            return {
+                "symbol": ticker,
+                "date": datetime.date.today().isoformat(),
+                "market_cap": market_cap,
+                "market_cap_str": market_cap_str,
+            }
         return {"error": f"Unknown tool: {name}"}
 
     # ------------------------------------------------------------------

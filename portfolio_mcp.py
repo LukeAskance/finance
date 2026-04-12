@@ -230,6 +230,43 @@ def get_account_totals(days: int = 30) -> list[dict]:
 # Tools — Market Data (live, via existing modules)
 # ---------------------------------------------------------------------------
 
+def _fmt_market_cap(market_cap: int) -> str:
+    if market_cap >= 1_000_000_000_000:
+        return f"${market_cap / 1_000_000_000_000:.2f}T"
+    if market_cap >= 1_000_000_000:
+        return f"${market_cap / 1_000_000_000:.2f}B"
+    return f"${market_cap / 1_000_000:.2f}M"
+
+
+@mcp.tool()
+def get_market_cap(ticker: str) -> dict:
+    """
+    Return the current market capitalisation for a ticker via yfinance.
+
+    Args:
+        ticker: Stock ticker symbol, e.g. 'AAPL'.
+
+    Returns a dict with keys:
+        symbol, date, market_cap (raw integer), market_cap_str (human-readable).
+    """
+    import datetime
+    import yfinance as yf
+
+    ticker = ticker.upper()
+    log.info("get_market_cap ticker=%s", ticker)
+
+    info = yf.Ticker(ticker).info
+    if not (market_cap := info.get("marketCap")):
+        raise ValueError(f"No market cap data available for {ticker}")
+
+    log.info("get_market_cap %s → %s", ticker, _fmt_market_cap(market_cap))
+    return {
+        "symbol":         ticker,
+        "date":           datetime.date.today().isoformat(),
+        "market_cap":     market_cap,
+        "market_cap_str": _fmt_market_cap(market_cap),
+    }
+
 @mcp.tool()
 def get_financials(ticker: str) -> dict:
     """
