@@ -6,6 +6,7 @@ import asyncio
 from typing import Any
 
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 import pandas as pd
 from nicegui import ui
 
@@ -13,6 +14,115 @@ from nicegui import ui
 # ---------------------------------------------------------------------------
 # Render helpers (operate on a fig; no plt.show())
 # ---------------------------------------------------------------------------
+
+def _shade_recessions(ax: Any, df_rec: pd.DataFrame) -> None:
+    """Shade NBER recession periods (USREC series) on an axis."""
+    in_rec = False
+    rec_start = None
+    for _, row in df_rec.iterrows():
+        if row["value"] == 1 and not in_rec:
+            in_rec = True
+            rec_start = row["date"]
+        elif row["value"] == 0 and in_rec:
+            in_rec = False
+            ax.axvspan(rec_start, row["date"], color="gray", alpha=0.25, label="_nolegend_")
+    if in_rec and rec_start is not None:
+        ax.axvspan(rec_start, df_rec["date"].max(), color="gray", alpha=0.25, label="_nolegend_")
+
+
+def _render_yield_spread(
+    fig: Any,
+    df_spread: pd.DataFrame,
+    df_rec: pd.DataFrame,
+    title: str,
+    months: int = 360,
+) -> None:
+    """Yield curve spread with zero line and NBER recession shading."""
+    end = df_spread["date"].max()
+    start = end - pd.DateOffset(months=months)
+    data = df_spread[df_spread["date"] >= start].copy()
+    rec = df_rec[df_rec["date"] >= start].copy()
+
+    ax = fig.add_subplot(111)
+    ax.plot(data["date"], data["value"], color="tab:blue", linewidth=1.2)
+    ax.axhline(0, color="red", linewidth=1.0, linestyle="--", label="Zero")
+    ax.fill_between(
+        data["date"],
+        data["value"],
+        0,
+        where=(data["value"] < 0),
+        color="red",
+        alpha=0.25,
+        label="Inverted",
+    )
+    ax.fill_between(
+        data["date"],
+        data["value"],
+        0,
+        where=(data["value"] >= 0),
+        color="tab:blue",
+        alpha=0.12,
+    )
+    _shade_recessions(ax, rec)
+
+    rec_patch = mpatches.Patch(color="gray", alpha=0.35, label="NBER Recession")
+    inv_patch = mpatches.Patch(color="red", alpha=0.4, label="Inverted")
+    ax.legend(handles=[rec_patch, inv_patch], fontsize=8)
+
+    ax.set_title(title)
+    ax.set_ylabel("Spread (percentage points)")
+    ax.set_xlabel("Date")
+    ax.grid(True, linestyle="--", alpha=0.5)
+    fig.autofmt_xdate()
+    fig.tight_layout()
+
+
+def _render_zscore_comparison(
+    fig: Any,
+    series_data: list[tuple[pd.DataFrame, str, str]],
+    df_rec: pd.DataFrame,
+    months: int = 420,
+) -> None:
+    """Plot multiple FRED series normalized to z-scores on a single axis."""
+    ax = fig.add_subplot(111)
+
+    if not series_data:
+        ax.text(
+            0.5, 0.5, "No series selected",
+            ha="center", va="center", transform=ax.transAxes,
+            fontsize=14, color="gray",
+        )
+        return
+
+    end = max(df["date"].max() for df, _, _ in series_data)
+    start = end - pd.DateOffset(months=months)
+    rec = df_rec[df_rec["date"] >= start].copy()
+
+    for df, label, color in series_data:
+        monthly = (
+            df.set_index("date")["value"]
+            .resample("ME")
+            .mean()
+            .dropna()
+        )
+        zscore = (monthly - monthly.mean()) / monthly.std()
+        visible = zscore[zscore.index >= pd.Timestamp(start)]
+        ax.plot(visible.index, visible.values, label=label, color=color, linewidth=1.5)
+
+    ax.axhline(0, color="gray", linewidth=0.8, linestyle="--", alpha=0.7)
+    _shade_recessions(ax, rec)
+
+    rec_patch = mpatches.Patch(color="gray", alpha=0.35, label="NBER Recession")
+    existing_handles, existing_labels = ax.get_legend_handles_labels()
+    ax.legend(handles=existing_handles + [rec_patch], fontsize=9)
+
+    ax.set_title("Leading Indicators — Z-Score Normalized (σ)")
+    ax.set_ylabel("Z-score (σ)")
+    ax.set_xlabel("Date")
+    ax.grid(True, linestyle="--", alpha=0.4)
+    fig.autofmt_xdate()
+    fig.tight_layout()
+
 
 def _render_timeseries(fig: Any, df: pd.DataFrame, start_date: str, title: str) -> None:
     start = pd.to_datetime(start_date)
@@ -141,7 +251,32 @@ def _build_catalogue() -> list[tuple[str, Any, Any, tuple[int, int]]]:
             _render_quad(fig, d1, d2, d3, d4, t1, t2, t3, t4, months)
         return fetch, render, (15, 8)
 
+    def yield_spread(series_id, title, months=360):
+        """Yield spread with NBER recession shading."""
+        def fetch():
+            return get_series(series_id), get_series("USREC")
+        def render(fig, df_spread, df_rec):
+            _render_yield_spread(fig, df_spread, df_rec, title, months)
+        return fetch, render, (14, 5)
+
     entries: list[tuple[str, Any, Any, tuple[int, int]]] = [
+        # ── Yield Curve Analysis ──────────────────────────────────────────────
+        ("Yield Curve ▸ 10Y-3M Spread + Recessions",
+         *yield_spread("T10Y3M", "10-Year minus 3-Month Treasury Yield (T10Y3M)")),
+        ("Yield Curve ▸ 10Y-2Y Spread + Recessions",
+         *yield_spread("T10Y2Y", "10-Year minus 2-Year Treasury Yield (T10Y2Y)")),
+        ("Yield Curve ▸ vs Jobless Claims",
+         *dual("T10Y3M", "ICSA", "10Y-3M Spread (pp)", "Initial Claims (thousands)", 300)),
+        ("Yield Curve ▸ Recession Probability",
+         *ts("RECPROUSM156N", "Smoothed US Recession Probability (%)", "1967-01-01")),
+        ("Yield Curve ▸ OECD Leading Indicator (LEI)",
+         *ts("USALOLITONOSTSAM", "OECD Composite Leading Indicator", "2000-01-01")),
+        ("Yield Curve ▸ LEI vs Consumer Sentiment",
+         *dual("USALOLITONOSTSAM", "UMCSENT", "OECD LEI", "Consumer Sentiment (Mich.)", 180)),
+        ("Yield Curve ▸ All Key Indicators",
+         *quad("T10Y3M", "ICSA", "UMCSENT", "RECPROUSM156N",
+               "10Y-3M Spread", "Jobless Claims", "Consumer Sentiment", "Recession Prob (%)", 120)),
+        # ── Macro / Money ─────────────────────────────────────────────────────
         ("M2 Real vs Govt Expenditures",
          *dual("M2REAL", "W068RCQ027SBEA", "M2 Real", "Govt Expenditures")),
         ("10-Year Market Yield vs CPI",
@@ -228,3 +363,112 @@ def build(panel_ref) -> None:
             plot_button.enable()
 
         plot_button.on_click(on_plot)
+
+        # ── Normalized Comparison (Z-Score) ──────────────────────────────────
+        ui.separator().classes("my-4")
+
+        with ui.card().classes("w-full"):
+            ui.label("Normalized Comparison (Z-Score)").classes("text-lg font-semibold")
+            ui.label(
+                "All series resampled to monthly and z-score normalized for direct "
+                "comparison. Plot fetches from FRED once; checkboxes redraw instantly."
+            ).classes("text-sm text-gray-400")
+
+        with ui.row().classes("gap-3 w-full"):
+            for card_label, card_value in [
+                ("Yield curve lead time", "12–18 mo"),
+                ("Credit spread lead",    "3–6 mo"),
+                ("Claims behavior",       "Coincident"),
+            ]:
+                with ui.card().classes("flex-1"):
+                    ui.label(card_label).classes("text-xs text-gray-400")
+                    ui.label(card_value).classes("text-xl font-semibold mt-1")
+
+        _zscore_cache: dict[str, pd.DataFrame | None] = {
+            "T10Y2Y": None, "BAMLH0A0HYM2": None, "ICSA": None, "USREC": None,
+        }
+
+        _ZSCORE_SERIES = [
+            ("T10Y2Y",       "Yield curve (T10Y2Y)",   "#3b82f6"),
+            ("BAMLH0A0HYM2", "Credit spread (HY OAS)", "#f97316"),
+            ("ICSA",         "Jobless claims (ICSA)",  "#10b981"),
+        ]
+
+        with ui.card().classes("w-full"):
+            with ui.row().classes("items-center gap-6 flex-wrap"):
+                cb_yield  = ui.checkbox("Yield curve (T10Y2Y)",         value=True, on_change=lambda _: _zscore_redraw())
+                cb_credit = ui.checkbox("Credit spread (BAMLH0A0HYM2)", value=True, on_change=lambda _: _zscore_redraw())
+                cb_claims = ui.checkbox("Jobless claims (ICSA)",         value=True, on_change=lambda _: _zscore_redraw())
+                zscore_button = ui.button("Plot")
+                zscore_status = ui.label("").classes("text-sm text-gray-400")
+
+        zscore_plot_area = ui.column().classes("w-full")
+
+        _CB_VALS = {
+            "T10Y2Y":       lambda: cb_yield.value,
+            "BAMLH0A0HYM2": lambda: cb_credit.value,
+            "ICSA":         lambda: cb_claims.value,
+        }
+
+        def _zscore_redraw() -> None:
+            if _zscore_cache["USREC"] is None:
+                zscore_status.text = "Click Plot to fetch data first."
+                return
+            active = []
+            for sid, label, color in _ZSCORE_SERIES:
+                if _CB_VALS[sid]() and _zscore_cache[sid] is not None:
+                    active.append((_zscore_cache[sid], label, color))
+            zscore_plot_area.clear()
+            with zscore_plot_area:
+                with ui.pyplot(figsize=(14, 6)) as p:
+                    _render_zscore_comparison(p.fig, active, _zscore_cache["USREC"])
+            zscore_status.text = "Done"
+
+        async def on_zscore_plot() -> None:
+            from pyfredapi import get_series  # type: ignore[attr-defined]
+
+            zscore_button.disable()
+            zscore_button.text = "Fetching…"
+            zscore_status.text = "Fetching 4 series from FRED…"
+            zscore_plot_area.clear()
+
+            def _fetch_all():
+                return {
+                    "T10Y2Y":       get_series("T10Y2Y"),
+                    "BAMLH0A0HYM2": get_series("BAMLH0A0HYM2"),
+                    "ICSA":         get_series("ICSA"),
+                    "USREC":        get_series("USREC"),
+                }
+
+            try:
+                fetched = await asyncio.to_thread(_fetch_all)
+            except Exception as exc:
+                ui.notify(f"FRED fetch error: {exc}", color="negative")
+                zscore_status.text = f"Error: {exc}"
+                zscore_button.text = "Plot"
+                zscore_button.enable()
+                return
+
+            _zscore_cache.update(fetched)
+            zscore_status.text = "Rendering…"
+            _zscore_redraw()
+            zscore_button.text = "Plot"
+            zscore_button.enable()
+
+        zscore_button.on_click(on_zscore_plot)
+
+        with ui.card().classes("w-full"):
+            ui.label("Key correlations").classes("font-semibold")
+            for bold, rest in [
+                ("Yield curve inverts",   "(goes negative) → recession follows in 12–18 months"),
+                ("Credit spreads spike",  "(go high) → credit stress, recession often 3–6 months out"),
+                ("Jobless claims surge",  "→ coincident with recession start / middle"),
+                ("Anti-correlation:",     "yield curve DOWN while credit/claims UP signals trouble"),
+            ]:
+                with ui.row().classes("gap-1 items-start mt-1"):
+                    ui.label(bold).classes("font-semibold text-sm")
+                    ui.label(rest).classes("text-sm text-gray-400")
+
+        with ui.row().classes("text-xs text-gray-500 mt-1 gap-2"):
+            ui.label("FRED series:").classes("font-medium")
+            ui.label("T10Y2Y · BAMLH0A0HYM2 · ICSA · USREC")
