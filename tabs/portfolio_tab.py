@@ -141,7 +141,7 @@ def build(
                 with ui.card().classes("w-full"):
                     ui.label("Schwab Quote").classes("text-xl font-semibold")
                     _refs["symbol_input"] = (
-                        ui.input("Symbol").props("clearable").classes("w-40")
+                        ui.input("Symbol").props('clearable spellcheck=false').classes("w-40")
                     )
                     ui.button("Get Quote", on_click=get_quote_click)
 

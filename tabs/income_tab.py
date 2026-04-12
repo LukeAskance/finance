@@ -246,7 +246,7 @@ def build(
             with ui.card().classes("w-full"):
                 ui.label("Stock Dividend History & Forecast").classes("text-xl font-semibold")
                 with ui.row().classes("items-center gap-3 w-full"):
-                    _refs["symbol_input"] = ui.input("Ticker", placeholder="AAPL").classes("w-32")
+                    _refs["symbol_input"] = ui.input("Ticker", placeholder="AAPL").props('spellcheck=false').classes("w-32")
                     _refs["shares_input"] = (
                         ui.input("Shares", value="100")
                         .props("type=number min=0.0001 step=0.0001")

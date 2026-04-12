@@ -378,7 +378,7 @@ def build(panel_ref, fetch_chain_fn) -> None:
             with ui.column().classes("w-1/3 min-w-[320px]"):
                 with ui.card().classes("w-full"):
                     ui.label("Options Chain Controls").classes("text-xl font-semibold")
-                    _refs["symbol_input"] = ui.input("Symbol").props("clearable").classes("w-40")
+                    _refs["symbol_input"] = ui.input("Symbol").props('clearable spellcheck=false').classes("w-40")
                     _refs["contract_type"] = ui.select(
                         options=["ALL", "CALL", "PUT"],
                         value="ALL",

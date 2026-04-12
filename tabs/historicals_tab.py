@@ -194,7 +194,7 @@ def build(panel_ref, ensure_snapshot_fn, get_api_fn, historicals_store, utilitie
                 ui.label("Historical Stock Prices").classes("text-xl font-semibold")
                 _refs["symbols_input"] = ui.input(
                     "Ticker symbols", placeholder="AAPL or AAPL,MSFT,GOOG"
-                ).classes("w-full")
+                ).props('spellcheck=false').classes("w-full")
                 with ui.row().classes("items-center gap-3 w-full"):
                     _refs["days_input"] = (
                         ui.input("Days", value="1825", on_change=on_mode_change)
