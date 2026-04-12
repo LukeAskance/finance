@@ -57,6 +57,28 @@ _CLAUDE_TOOLS: list[dict] = [
             "required": ["ticker"],
         },
     },
+    {
+        "name": "get_price_history",
+        "description": (
+            "Get recent closing price history for a stock ticker. "
+            "Use this when the user asks about price performance, returns, "
+            "how a stock has moved, 52-week high/low, or trend over time."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {
+                    "type": "string",
+                    "description": "The stock ticker symbol, e.g. 'AAPL'.",
+                },
+                "days": {
+                    "type": "integer",
+                    "description": "Number of calendar days of history to return (default 90).",
+                },
+            },
+            "required": ["ticker"],
+        },
+    },
 ]
 
 
@@ -473,6 +495,21 @@ class PortfolioAnalysisEngine:
                 "market_cap": market_cap,
                 "market_cap_str": market_cap_str,
             }
+        if name == "get_price_history":
+            import datetime
+            ticker = tool_input.get("ticker", "").upper()
+            days = int(tool_input.get("days", 90))
+            end = datetime.date.today()
+            start = end - datetime.timedelta(days=days)
+            hist = yf.Ticker(ticker).history(
+                start=start.isoformat(), end=end.isoformat()
+            )
+            if hist.empty:
+                return {"error": f"No price history returned for {ticker}"}
+            return [
+                {"date": str(d)[:10], "close": round(float(row["Close"]), 4)}
+                for d, row in hist.iterrows()
+            ]
         return {"error": f"Unknown tool: {name}"}
 
     # ------------------------------------------------------------------
