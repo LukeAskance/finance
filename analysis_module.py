@@ -18,6 +18,12 @@ from positions import load_portfolio_positions
 # ---------------------------------------------------------------------------
 # Tool definitions exposed to the Claude tool-use API
 # ---------------------------------------------------------------------------
+_MODEL_ALIASES: dict[str, str] = {
+    "opus":    "claude-opus-4-6",
+    "sonnet":  "claude-sonnet-4-6",
+    "haiku":   "claude-haiku-4-5-20251001",
+}
+
 _CLAUDE_TOOLS: list[dict] = [
     {
         "name": "get_institutional_ownership",
@@ -411,10 +417,8 @@ class PortfolioAnalysisEngine:
             f"\n\nQuestion: {question}"
         )
 
-        candidate_models = [
-            model.strip(),
-            "claude-sonnet-4-20250514",
-        ]
+        resolved = _MODEL_ALIASES.get(model.strip().lower(), model.strip())
+        candidate_models = [resolved, "claude-sonnet-4-6"]
         unique_models: list[str] = []
         for item in candidate_models:
             if item and item not in unique_models:
@@ -562,7 +566,8 @@ class PortfolioAnalysisEngine:
             f"{json.dumps(snapshot, indent=2)}\n\nQuestion: {question}"
         )
 
-        candidate_models = [model.strip(), "claude-sonnet-4-20250514"]
+        resolved = _MODEL_ALIASES.get(model.strip().lower(), model.strip())
+        candidate_models = [resolved, "claude-sonnet-4-6"]
         unique_models: list[str] = []
         for m in candidate_models:
             if m and m not in unique_models:
