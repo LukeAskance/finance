@@ -142,6 +142,15 @@ class DailyPositionSnapshot(Base):
     average_cost: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
+class MarketIndicatorSnapshot(Base):
+    __tablename__ = "market_indicator_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    vix: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sp500: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
 _engine = None
 _SessionLocal: sessionmaker[Session] | None = None
 
@@ -348,6 +357,29 @@ def get_latest_portfolio_total() -> tuple[str, float] | None:
         return None
     d, total = row
     return d.isoformat(), round(float(total or 0.0), 2)
+
+
+def save_market_indicators(vix: float | None, sp500: float | None) -> None:
+    """Persist VIX and S&P 500 values with a UTC timestamp."""
+    with session_scope() as session:
+        session.add(
+            MarketIndicatorSnapshot(
+                timestamp=datetime.now(timezone.utc),
+                vix=vix,
+                sp500=sp500,
+            )
+        )
+
+
+def get_last_market_indicators() -> tuple[float | None, float | None]:
+    """Return (vix, sp500) from the most recent saved row, or (None, None)."""
+    with session_scope() as session:
+        row = session.execute(
+            select(MarketIndicatorSnapshot)
+            .order_by(MarketIndicatorSnapshot.timestamp.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+    return (None, None) if row is None else (row.vix, row.sp500)
 
 
 def get_totals_payload(days: int = 365) -> dict[str, Any]:

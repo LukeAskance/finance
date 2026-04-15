@@ -678,7 +678,8 @@ class PortfolioAnalysisEngine:
 
         if general_mode:
             system_text = (
-                "You are a helpful assistant. You have access to the user's portfolio data for context when relevant. "
+                "You are a helpful assistant. You have access to the user's "
+                "portfolio data for context when relevant. "
                 "Be concise and include concrete symbols/values when available."
             )
         else:
@@ -686,7 +687,8 @@ class PortfolioAnalysisEngine:
                 "Answer ONLY using the provided portfolio snapshot data. "
                 "If unavailable in that data, state that clearly."
                 if grounded_only
-                else "You may answer generally, but prioritize the provided portfolio snapshot when relevant."
+                else "You may answer generally, but prioritize the "
+                     "provided portfolio snapshot when relevant."
             )
             system_text = (
                 "You are a portfolio analysis assistant. "

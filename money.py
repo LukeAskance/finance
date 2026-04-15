@@ -49,6 +49,7 @@ SchwabClient: Any = _SchwabClient
 
 load_dotenv()
 historicals_store.init_db("/Users/george/code/money/portfolio.db")
+_prev_vix, _prev_sp500 = historicals_store.get_last_market_indicators()
 
 dark_mode = ui.dark_mode()
 dark_mode.enable()
@@ -259,21 +260,84 @@ def aggregate_rows_by_symbol(
 
 
 async def fetch_market_indicators() -> None:
+    global _prev_vix, _prev_sp500
+
     def _fetch():
-        results = {}
+        import httpx
+        results: dict[str, Any] = {}
         for ticker, key in [("^VIX", "vix"), ("^GSPC", "sp500")]:
             try:
                 info = yf.Ticker(ticker).info
                 results[key] = info.get("regularMarketPrice")
             except Exception:
                 results[key] = None
+        try:
+            r = httpx.get(
+                "https://api.fiscaldata.treasury.gov/services/api/fiscal_service"
+                "/v2/accounting/od/debt_to_penny",
+                params={"sort": "-record_date", "page[size]": 1},
+                timeout=10,
+            )
+            r.raise_for_status()
+            rows = r.json().get("data") or []
+            if rows:
+                results["debt"] = {
+                    "date":   rows[0]["record_date"],
+                    "amount": float(rows[0]["tot_pub_debt_out_amt"]),
+                }
+        except Exception:
+            results["debt"] = None
         return results
 
     data = await asyncio.get_event_loop().run_in_executor(None, _fetch)
-    vix_val = data.get("vix")
+    vix_val   = data.get("vix")
     sp500_val = data.get("sp500")
+    debt_data = data.get("debt")
+
+    # VIX — higher is worse, so red = up
     vix_label.set_text(f"{vix_val:.2f}" if vix_val else "—")
+    if vix_val is not None and _prev_vix is not None:
+        d = vix_val - _prev_vix
+        sign = "+" if d >= 0 else ""
+        vix_change_label.set_text(f"({sign}{d:.2f})")
+        vix_change_label.classes(
+            remove="text-green-400 text-red-400",
+            add="text-red-400" if d >= 0 else "text-green-400",
+        )
+    else:
+        vix_change_label.set_text("")
+    if vix_val is not None:
+        _prev_vix = vix_val
+
+    # S&P 500 — higher is better, so green = up
     sp500_label.set_text(f"{sp500_val:,.2f}" if sp500_val else "—")
+    if sp500_val is not None and _prev_sp500 is not None:
+        d = sp500_val - _prev_sp500
+        sign = "+" if d >= 0 else ""
+        sp500_change_label.set_text(f"({sign}{d:,.2f})")
+        sp500_change_label.classes(
+            remove="text-green-400 text-red-400",
+            add="text-green-400" if d >= 0 else "text-red-400",
+        )
+    else:
+        sp500_change_label.set_text("")
+    if sp500_val is not None:
+        _prev_sp500 = sp500_val
+
+    # Persist for next session
+    if vix_val is not None or sp500_val is not None:
+        await asyncio.to_thread(
+            historicals_store.save_market_indicators, vix_val, sp500_val
+        )
+
+    # Debt to the Penny
+    if debt_data:
+        amt = debt_data["amount"]
+        debt_value_label.set_text(f"${amt:,.2f}")
+        debt_date_label.set_text(debt_data["date"])
+    else:
+        debt_value_label.set_text("—")
+        debt_date_label.set_text("")
 
 
 async def exit_app_click():
@@ -371,8 +435,10 @@ with ui.tab_panels(tabs, value=dashboard_tab).classes("w-full"):
             with ui.row().classes("items-center gap-4"):
                 ui.label("VIX:").classes("font-semibold")
                 vix_label = ui.label("…").classes("text-lg")
+                vix_change_label = ui.label("").classes("text-sm")
                 ui.label("S&P 500:").classes("font-semibold ml-4")
                 sp500_label = ui.label("…").classes("text-lg")
+                sp500_change_label = ui.label("").classes("text-sm")
             with ui.row().classes("items-center gap-6 mt-1"):
                 with ui.column().classes("gap-0"):
                     ui.label("Portfolio (live)").classes("text-xs text-gray-400")
@@ -385,6 +451,10 @@ with ui.tab_panels(tabs, value=dashboard_tab).classes("w-full"):
                 with ui.column().classes("gap-0"):
                     ui.label("Change").classes("text-xs text-gray-400")
                     portfolio_change_value = ui.label("—").classes("text-lg")
+                with ui.column().classes("gap-0"):
+                    ui.label("Debt to the Penny").classes("text-xs text-gray-400")
+                    debt_value_label = ui.label("—").classes("text-lg font-semibold")
+                    debt_date_label = ui.label("").classes("text-xs text-gray-500")
             with ui.row().classes("items-center gap-3"):
                 refresh_portfolio_snapshot_button = ui.button(
                     "Refresh Portfolio Snapshot",
