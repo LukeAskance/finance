@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import pandas as pd
 from nicegui import ui
@@ -174,8 +173,8 @@ def _render_sahm_rule(
 def _render_timeseries(fig: Any, df: pd.DataFrame, start_date: str, title: str) -> None:
     start = pd.to_datetime(start_date)
     data = df[df["date"] >= start].copy()
-    data["mom"] = data["value"].pct_change() * 100
-    data["yoy"] = data["value"].pct_change(periods=12) * 100
+    data["mom"] = data["value"].pct_change(fill_method=None) * 100
+    data["yoy"] = data["value"].pct_change(periods=12, fill_method=None) * 100
 
     ax1, ax2, ax3 = fig.subplots(3, 1, height_ratios=[1.5, 1, 1])
 
