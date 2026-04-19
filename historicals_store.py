@@ -375,10 +375,10 @@ def get_last_market_indicators() -> tuple[float | None, float | None]:
     """Return (vix, sp500) from the most recent saved row, or (None, None)."""
     with session_scope() as session:
         row = session.execute(
-            select(MarketIndicatorSnapshot)
+            select(MarketIndicatorSnapshot.vix, MarketIndicatorSnapshot.sp500)
             .order_by(MarketIndicatorSnapshot.timestamp.desc())
             .limit(1)
-        ).scalar_one_or_none()
+        ).one_or_none()
     return (None, None) if row is None else (row.vix, row.sp500)
 
 

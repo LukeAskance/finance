@@ -488,14 +488,14 @@ def _discover_fidelity_position_seeds(
         headings = next(reader)
 
         for row in csv.DictReader(f, fieldnames=headings):
-            symbol = str(row.get("Symbol", "")).strip().upper()
+            symbol = str(row.get("Symbol") or "").strip().upper()
             if not symbol:
                 continue
 
             if symbol == "PENDING ACTIVITY":
                 continue
 
-            description = str(row.get("Description", "")).strip()
+            description = str(row.get("Description") or "").strip()
 
             if symbol in {"CORE**", "FDRXX**", "SPRXX"}:
                 cash_value = _safe_float(row.get("Current Value"))
