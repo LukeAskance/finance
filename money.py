@@ -1,6 +1,7 @@
 #! /Users/george/code/money/.venv/bin/python3
 
 import asyncio
+import csv
 import os
 import subprocess
 import sys
@@ -209,6 +210,13 @@ async def ensure_portfolio_snapshot(
     portfolio_snapshot_positions = list(positions)
     portfolio_snapshot_rows = rows
     portfolio_snapshot_as_of = datetime.now()
+
+    top20 = aggregate_rows_by_symbol(rows)[:20]
+    csv_path = os.path.join(os.path.dirname(__file__), "top-twenty.csv")
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.writer(f)
+        for row in top20:
+            writer.writerow([row["symbol"]])
 
     return portfolio_snapshot_positions, portfolio_snapshot_rows
 
