@@ -17,6 +17,7 @@ from sqlalchemy import (
     delete,
     func,
     select,
+    text,
 )
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import (
@@ -149,6 +150,7 @@ class MarketIndicatorSnapshot(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     vix: Mapped[float | None] = mapped_column(Float, nullable=True)
     sp500: Mapped[float | None] = mapped_column(Float, nullable=True)
+    gld: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
 _engine = None
@@ -160,6 +162,11 @@ def init_db(db_path: str) -> None:
     _engine = create_engine(f"sqlite:///{db_path}", future=True)
     _SessionLocal = sessionmaker(bind=_engine, autoflush=False, autocommit=False, future=True)
     Base.metadata.create_all(_engine)
+    with _engine.connect() as conn:
+        cols = {row[1] for row in conn.execute(text("PRAGMA table_info(market_indicator_snapshots)"))}
+        if "gld" not in cols:
+            conn.execute(text("ALTER TABLE market_indicator_snapshots ADD COLUMN gld REAL"))
+            conn.commit()
 
 
 @contextmanager
@@ -359,27 +366,28 @@ def get_latest_portfolio_total() -> tuple[str, float] | None:
     return d.isoformat(), round(float(total or 0.0), 2)
 
 
-def save_market_indicators(vix: float | None, sp500: float | None) -> None:
-    """Persist VIX and S&P 500 values with a UTC timestamp."""
+def save_market_indicators(vix: float | None, sp500: float | None, gld: float | None = None) -> None:
+    """Persist VIX, S&P 500, and GLD values with a UTC timestamp."""
     with session_scope() as session:
         session.add(
             MarketIndicatorSnapshot(
                 timestamp=datetime.now(timezone.utc),
                 vix=vix,
                 sp500=sp500,
+                gld=gld,
             )
         )
 
 
-def get_last_market_indicators() -> tuple[float | None, float | None]:
-    """Return (vix, sp500) from the most recent saved row, or (None, None)."""
+def get_last_market_indicators() -> tuple[float | None, float | None, float | None]:
+    """Return (vix, sp500, gld) from the most recent saved row, or (None, None, None)."""
     with session_scope() as session:
         row = session.execute(
-            select(MarketIndicatorSnapshot.vix, MarketIndicatorSnapshot.sp500)
+            select(MarketIndicatorSnapshot.vix, MarketIndicatorSnapshot.sp500, MarketIndicatorSnapshot.gld)
             .order_by(MarketIndicatorSnapshot.timestamp.desc())
             .limit(1)
         ).one_or_none()
-    return (None, None) if row is None else (row.vix, row.sp500)
+    return (None, None, None) if row is None else (row.vix, row.sp500, row.gld)
 
 
 def get_totals_payload(days: int = 365) -> dict[str, Any]:
