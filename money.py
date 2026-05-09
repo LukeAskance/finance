@@ -211,12 +211,14 @@ async def ensure_portfolio_snapshot(
     portfolio_snapshot_rows = rows
     portfolio_snapshot_as_of = datetime.now()
 
-    top20 = aggregate_rows_by_symbol(rows)[:20]
-    csv_path = os.path.join(os.path.dirname(__file__), "top-twenty.csv")
+    datecode = datetime.now().strftime("%y%m%d")
+    csv_path = os.path.join(os.path.dirname(__file__), f"Portfolio-{datecode}.csv")
+    aggregated = aggregate_rows_by_symbol(rows)
     with open(csv_path, "w", newline="") as f:
         writer = csv.writer(f)
-        for row in top20:
-            writer.writerow([row["symbol"]])
+        writer.writerow(["symbol", "share_quantity", "latest_price", "market_value"])
+        for row in aggregated:
+            writer.writerow([row["symbol"], row["quantity"], row["last"], row["market_value"]])
 
     return portfolio_snapshot_positions, portfolio_snapshot_rows
 
