@@ -390,6 +390,40 @@ def get_last_market_indicators() -> tuple[float | None, float | None, float | No
     return (None, None, None) if row is None else (row.vix, row.sp500, row.gld)
 
 
+def get_cached_company_names(symbols: list[str]) -> dict[str, str]:
+    """Return symbol → name for any symbols already stored in the instruments table."""
+    if not symbols:
+        return {}
+    with session_scope() as session:
+        rows = session.execute(
+            select(Instrument.symbol, Instrument.name).where(
+                Instrument.symbol.in_(symbols),
+                Instrument.name.is_not(None),
+                Instrument.name != "",
+            )
+        ).all()
+    return {sym: name for sym, name in rows if name}
+
+
+def set_company_names(names: dict[str, str]) -> None:
+    """Upsert company names into the instruments table, creating stub rows as needed."""
+    if not names:
+        return
+    with session_scope() as session:
+        for symbol, name in names.items():
+            if not name:
+                continue
+            stmt = (
+                sqlite_insert(Instrument)
+                .values(symbol=symbol, name=name, instrument_type="equity", currency="USD")
+                .on_conflict_do_update(
+                    index_elements=["symbol"],
+                    set_={"name": name},
+                )
+            )
+            session.execute(stmt)
+
+
 def get_totals_payload(days: int = 365) -> dict[str, Any]:
     start_date = datetime.now(timezone.utc).date() - timedelta(days=max(1, int(days)) - 1)
 

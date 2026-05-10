@@ -175,6 +175,7 @@ def _build_portfolio_rows_from_positions(
                 else p.position_type
             ),
             "account": p.account_name,
+            "description": p.description,
             "underlying": _underlying_symbol(p.underlying),
             "quantity": round(float(p.quantity), 4),
             "last": round(float(p.last_price), 4),
@@ -187,6 +188,31 @@ def _build_portfolio_rows_from_positions(
     ]
     rows.sort(key=lambda r: float(r.get("market_value", 0.0)), reverse=True)
     return rows
+
+
+def _fetch_company_names(symbols: list[str]) -> dict[str, str]:
+    equity_symbols = [s for s in symbols if len(s) <= 5 and s.isalpha()]
+    if not equity_symbols:
+        return {}
+
+    cached = historicals_store.get_cached_company_names(equity_symbols)
+    missing = [s for s in equity_symbols if s not in cached]
+
+    fetched: dict[str, str] = {}
+    if missing:
+        with suppress(Exception):
+            tickers = yf.Tickers(" ".join(missing))
+            for sym in missing:
+                try:
+                    info = tickers.tickers[sym].info
+                    fetched[sym] = info.get("longName") or info.get("shortName") or ""
+                except Exception:
+                    fetched[sym] = ""
+        new_names = {sym: name for sym, name in fetched.items() if name}
+        if new_names:
+            historicals_store.set_company_names(new_names)
+
+    return {**cached, **fetched}
 
 
 async def ensure_portfolio_snapshot(
@@ -214,11 +240,13 @@ async def ensure_portfolio_snapshot(
     datecode = datetime.now().strftime("%y%m%d")
     csv_path = os.path.join(os.path.dirname(__file__), f"Portfolio-{datecode}.csv")
     aggregated = aggregate_rows_by_symbol(rows)
+    symbols = [r["symbol"] for r in aggregated]
+    company_names = await asyncio.to_thread(_fetch_company_names, symbols)
     with open(csv_path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["symbol", "share_quantity", "latest_price", "market_value"])
+        writer.writerow(["symbol", "company_name", "share_quantity", "latest_price", "market_value"])
         for row in aggregated:
-            writer.writerow([row["symbol"], row["quantity"], row["last"], row["market_value"]])
+            writer.writerow([row["symbol"], company_names.get(row["symbol"], ""), row["quantity"], row["last"], row["market_value"]])
 
     return portfolio_snapshot_positions, portfolio_snapshot_rows
 
@@ -236,6 +264,7 @@ def aggregate_rows_by_symbol(
         if symbol not in grouped:
             grouped[symbol] = {
                 "symbol": symbol,
+                "description": row.get("description", ""),
                 "type": row.get("type", ""),
                 "account": "Aggregated",
                 "underlying": row.get("underlying", symbol),
