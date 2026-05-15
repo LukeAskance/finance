@@ -183,6 +183,7 @@ def _build_portfolio_rows_from_positions(
             "pl": round(float(p.pl_total), 2),
             "pct_pl": _pct_pl(float(p.pl_total), float(p.market_value)),
             "pe_ratio": _pe_ratio_for_row(p),
+            "div_yield": round(float(p.div_yield), 2) if p.div_yield else None,
         }
         for p in positions
     ]
@@ -273,6 +274,7 @@ def aggregate_rows_by_symbol(
                 "market_value": 0.0,
                 "pl": 0.0,
                 "pe_ratio": row.get("pe_ratio", "--"),
+                "div_yield": row.get("div_yield"),
             }
 
         grouped[symbol]["quantity"] += float(row.get("quantity", 0.0))

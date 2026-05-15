@@ -252,6 +252,14 @@ def build(
                             "align": "right",
                             "style": "width: 6ch; max-width: 6ch;",
                         },
+                        {
+                            "name": "div_yield",
+                            "label": "Div Yld%",
+                            "field": "div_yield",
+                            "sortable": True,
+                            "align": "right",
+                            "style": "width: 8ch; max-width: 8ch;",
+                        },
                     ]
                     with ui.element("div").classes("w-full portfolio-table-wrap"):
                         _refs["portfolio_table"] = ui.table(
