@@ -384,7 +384,8 @@ async def fetch_market_indicators() -> None:
     # Persist for next session
     if vix_val is not None or sp500_val is not None or gld_val is not None:
         await asyncio.to_thread(
-            historicals_store.save_market_indicators, vix_val, sp500_val, gld_val
+            historicals_store.save_market_indicators,
+            vix_val, sp500_val, gld_val
         )
 
     # Debt to the Penny
@@ -463,12 +464,20 @@ async def refresh_portfolio_snapshot_click() -> None:
             color="positive",
         )
         await fetch_market_indicators()
+    except RuntimeError:
+        pass  # client disconnected before UI could be updated
     except Exception as exc:
-        portfolio_snapshot_status_value.text = f"Refresh failed: {exc}"
-        ui.notify(f"Portfolio snapshot refresh failed: {exc}", color="negative")
+        try:
+            portfolio_snapshot_status_value.text = f"Refresh failed: {exc}"
+            ui.notify(f"Portfolio snapshot refresh failed: {exc}", color="negative")
+        except RuntimeError:
+            pass
     finally:
-        refresh_portfolio_snapshot_button.text = "Refresh Portfolio Snapshot"
-        refresh_portfolio_snapshot_button.enable()
+        try:
+            refresh_portfolio_snapshot_button.text = "Refresh Portfolio Snapshot"
+            refresh_portfolio_snapshot_button.enable()
+        except RuntimeError:
+            pass
 
 
 # ---------------------------------------------------------------------------
