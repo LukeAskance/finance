@@ -239,7 +239,8 @@ async def ensure_portfolio_snapshot(
     portfolio_snapshot_as_of = datetime.now()
 
     datecode = datetime.now().strftime("%y%m%d")
-    csv_path = os.path.join(os.path.dirname(__file__), f"Portfolio-{datecode}.csv")
+    csv_dir = os.getenv("JiminyFinanceDir", os.path.dirname(__file__))
+    csv_path = os.path.join(csv_dir, f"Portfolio-{datecode}.csv")
     aggregated = aggregate_rows_by_symbol(rows)
     symbols = [r["symbol"] for r in aggregated]
     company_names = await asyncio.to_thread(_fetch_company_names, symbols)
