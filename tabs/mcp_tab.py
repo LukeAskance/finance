@@ -1,4 +1,4 @@
-"""tabs/mcp_tab.py — MCP Portfolio Chat tab (Priority 4: deduplicated tool-use loop)."""
+"""tabs/mcp_tab.py — MCP Portfolio Chat tab."""
 
 from __future__ import annotations
 
@@ -9,6 +9,8 @@ import urllib.request as urlrequest
 from typing import Any
 
 from nicegui import ui
+
+import claude_client
 
 # ---------------------------------------------------------------------------
 # Tool schemas
@@ -142,117 +144,35 @@ def _execute_tool(name: str, tool_input: dict) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# Priority 4: deduplicated tool-use loop
+# LLM callers (shared tool-use loop lives in claude_client.py)
 # ---------------------------------------------------------------------------
 
-def _claude_tool_use_loop(
-    messages: list[dict],
-    api_key: str,
-    model: str,
-    system: str,
-    max_tokens: int = 2048,
-    raise_on_http_error: bool = True,
-    collect_summaries: bool = False,
-    max_rounds: int = 10,
-) -> tuple[str | None, list[str]]:
-    """
-    Run a Claude tool-use loop until a text response is produced.
-
-    Returns (final_text_or_None, tool_summaries).
-    If raise_on_http_error is False, HTTP errors silently break the loop.
-    If collect_summaries is True, each tool call is recorded as a string.
-    """
-    headers = {
-        "content-type": "application/json",
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
-    }
-    local_messages = list(messages)
-    summaries: list[str] = []
-
-    for _ in range(max_rounds):
-        payload = {
-            "model": model,
-            "max_tokens": max_tokens,
-            "system": system,
-            "messages": local_messages,
-            "tools": TOOLS,
-        }
-        req = urlrequest.Request(
-            url="https://api.anthropic.com/v1/messages",
-            data=json.dumps(payload).encode(),
-            headers=headers,
-            method="POST",
-        )
-        try:
-            with urlrequest.urlopen(req, timeout=60) as resp:
-                body = json.loads(resp.read().decode())
-        except urlerror.HTTPError as exc:
-            if not raise_on_http_error:
-                break
-            detail = exc.read().decode("utf-8", errors="ignore")
-            raise RuntimeError(f"Claude API error ({exc.code}): {detail}") from exc
-        except Exception:
-            if not raise_on_http_error:
-                break
-            raise
-
-        stop_reason = body.get("stop_reason")
-        content = body.get("content", [])
-
-        if stop_reason != "tool_use":
-            for block in content:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    return str(block.get("text", "")), summaries
-            return None, summaries
-
-        local_messages.append({"role": "assistant", "content": content})
-        tool_results = []
-        for block in content:
-            if not isinstance(block, dict) or block.get("type") != "tool_use":
-                continue
-            result = _execute_tool(block["name"], block.get("input", {}))
-            if collect_summaries:
-                summaries.append(
-                    f"[{block['name']}({block.get('input', {})})] → {json.dumps(result)}"
-                )
-            tool_results.append({
-                "type": "tool_result",
-                "tool_use_id": block["id"],
-                "content": json.dumps(result),
-            })
-        local_messages.append({"role": "user", "content": tool_results})
-
-    return None, summaries
-
-
-# ---------------------------------------------------------------------------
-# LLM callers
-# ---------------------------------------------------------------------------
-
-def _call_claude(messages: list[dict], api_key: str, model: str = "claude-sonnet-4-6") -> str:
-    text, _ = _claude_tool_use_loop(
-        messages, api_key, model,
+def _call_claude(messages: list[dict], model: str = claude_client.DEFAULT_MODEL) -> str:
+    result = claude_client.run_tool_loop(
+        list(messages),
         system=SYSTEM,
-        max_tokens=2048,
-        raise_on_http_error=True,
-        collect_summaries=False,
+        tools=TOOLS,
+        execute_tool=_execute_tool,
+        model=model,
     )
-    return text or "Tool-use loop exceeded maximum iterations."
+    return result.text
 
 
 def _call_perplexity(messages: list[dict], api_key: str, model: str) -> str:
     """Gather data via Claude tool-use, then ask Perplexity with context injected."""
     tool_context = ""
-    anthropic_key = os.getenv("ANTHROPIC_API_KEY")
-    if anthropic_key:
-        _, summaries = _claude_tool_use_loop(
-            list(messages), anthropic_key, "claude-sonnet-4-6",
-            system=_GATHER_SYSTEM,
-            max_tokens=512,
-            raise_on_http_error=False,
-            collect_summaries=True,
-        )
+    if os.getenv("ANTHROPIC_API_KEY"):
+        try:
+            gathered = claude_client.run_tool_loop(
+                list(messages),
+                system=_GATHER_SYSTEM,
+                tools=TOOLS,
+                execute_tool=_execute_tool,
+                model=claude_client.FALLBACK_MODEL,
+            )
+            summaries = gathered.tool_summaries
+        except Exception:
+            summaries = []
         if summaries:
             tool_context = "\n\nLive data gathered from portfolio tools:\n" + "\n".join(summaries)
 
@@ -314,15 +234,6 @@ def build(panel_ref) -> None:
                     value="claude",
                     label="Provider",
                 ).classes("w-36")
-                model_input = ui.input("Model", value="claude-sonnet-4-6").classes("w-56")
-
-            provider_select.on(
-                "update:model-value",
-                lambda _: model_input.__setattr__(
-                    "value",
-                    "sonar" if provider_select.value == "perplexity" else "claude-sonnet-4-6",
-                ),
-            )
 
             async def send_click() -> None:
                 user_text = chat_input.value.strip()
@@ -350,14 +261,12 @@ def build(panel_ref) -> None:
 
                 try:
                     if provider == "perplexity":
-                        model = model_input.value.strip() or "sonar"
                         answer = await asyncio.to_thread(
-                            _call_perplexity, list(history), api_key, model
+                            _call_perplexity, list(history), api_key, "sonar"
                         )
                     else:
-                        model = model_input.value.strip() or "claude-sonnet-4-6"
                         answer = await asyncio.to_thread(
-                            _call_claude, list(history), api_key, model
+                            _call_claude, list(history), claude_client.DEFAULT_MODEL
                         )
                     history.append({"role": "assistant", "content": answer})
                     with chat_column:

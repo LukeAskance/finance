@@ -30,6 +30,9 @@ except ImportError as exc:
 load_dotenv()
 
 
+# One US equity option contract controls 100 shares; quotes are per share.
+OPTION_CONTRACT_MULTIPLIER = 100.0
+
 DEFAULT_ACCOUNT_MAPPING = {
     "11351369": "GeorgeTrust",
     "21178329": "DebRoth",
@@ -114,10 +117,6 @@ class PortfolioPosition:
     mark_percentage_change: Optional[float] = None
 
     @property
-    def accountName(self) -> str:
-        return self.account_name
-
-    @property
     def accountCash(self) -> float:
         return self.account_cash
 
@@ -140,10 +139,6 @@ class PortfolioPosition:
     @property
     def lastPrice(self) -> float:
         return self.last_price
-
-    @property
-    def divPayAmount(self) -> float:
-        return self.div_pay_amount
 
     @property
     def divPayDate(self) -> str:
@@ -180,10 +175,6 @@ class PortfolioPosition:
     @property
     def PL(self) -> float:
         return self.pl_total
-
-    @property
-    def marketValue(self) -> float:
-        return self.market_value
 
     @property
     def percentPL(self) -> float:
@@ -405,11 +396,12 @@ def _discover_schwab_position_seeds(
                 if is_option and not include_options:
                     continue
 
-                quantity = (
-                    position.get("longQuantity")
-                    or position.get("shortQuantity")
-                    or 0
-                )
+                # Schwab reports shortQuantity as a positive number; carry
+                # short positions as negative quantity so market value and
+                # P/L get the right sign.
+                long_qty = _safe_float(position.get("longQuantity"))
+                short_qty = _safe_float(position.get("shortQuantity"))
+                quantity = long_qty - short_qty
                 underlying = (
                     _extract_underlying_from_option_symbol(symbol)
                     if is_option
@@ -428,9 +420,10 @@ def _discover_schwab_position_seeds(
                         account_name=account_name,
                         account_cash=account_cash,
                         description=instrument.get("description", "EQUITY"),
-                        quantity=_safe_float(quantity),
+                        quantity=quantity,
                         average_cost=_safe_float(
                             position.get("averageLongPrice")
+                            or position.get("averageShortPrice")
                         ),
                         position_type=option_type,
                         strike_price=_safe_optional_float(
@@ -613,13 +606,13 @@ def _build_option_position_from_seed(
     )
 
     pl = last_price - seed.average_cost
-    pl_total = pl * seed.quantity
+    pl_total = pl * seed.quantity * OPTION_CONTRACT_MULTIPLIER
     percent_pl = (
         (100 * (pl / seed.average_cost))
         if seed.average_cost
         else 100.0
     )
-    market_value = mark * seed.quantity
+    market_value = mark * seed.quantity * OPTION_CONTRACT_MULTIPLIER
 
     position_type = str(seed.position_type).upper()
     if position_type not in {"CALL", "PUT"}:

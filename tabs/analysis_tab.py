@@ -7,11 +7,12 @@ from typing import Any
 
 from nicegui import ui
 
+import claude_client
 from financials import get_financials, get_insider_transactions
 from institutional import get_institutional_ownership
 
 _DEFAULT_MODELS = {
-    "claude": "claude-sonnet-4-20250514",
+    "claude": claude_client.DEFAULT_MODEL,
     "perplexity": "sonar",
 }
 

@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from datetime import datetime
 from typing import Any
@@ -201,14 +202,15 @@ def _fetch_company_names(symbols: list[str]) -> dict[str, str]:
 
     fetched: dict[str, str] = {}
     if missing:
-        with suppress(Exception):
-            tickers = yf.Tickers(" ".join(missing))
-            for sym in missing:
-                try:
-                    info = tickers.tickers[sym].info
-                    fetched[sym] = info.get("longName") or info.get("shortName") or ""
-                except Exception:
-                    fetched[sym] = ""
+        def fetch_name(sym: str) -> tuple[str, str]:
+            try:
+                info = yf.Ticker(sym).info
+                return sym, info.get("longName") or info.get("shortName") or ""
+            except Exception:
+                return sym, ""
+
+        with ThreadPoolExecutor(max_workers=min(8, len(missing))) as pool:
+            fetched = dict(pool.map(fetch_name, missing))
         new_names = {sym: name for sym, name in fetched.items() if name}
         if new_names:
             historicals_store.set_company_names(new_names)
@@ -307,12 +309,17 @@ async def fetch_market_indicators() -> None:
     def _fetch():
         import httpx
         results: dict[str, Any] = {}
-        for ticker, key in [("^VIX", "vix"), ("^GSPC", "sp500"), ("GLD", "gld")]:
+
+        def fetch_price(pair: tuple[str, str]) -> tuple[str, Any]:
+            ticker, key = pair
             try:
-                info = yf.Ticker(ticker).info
-                results[key] = info.get("regularMarketPrice")
+                return key, yf.Ticker(ticker).info.get("regularMarketPrice")
             except Exception:
-                results[key] = None
+                return key, None
+
+        pairs = [("^VIX", "vix"), ("^GSPC", "sp500"), ("GLD", "gld")]
+        with ThreadPoolExecutor(max_workers=len(pairs)) as pool:
+            results.update(dict(pool.map(fetch_price, pairs)))
         try:
             r = httpx.get(
                 "https://api.fiscaldata.treasury.gov/services/api/fiscal_service"

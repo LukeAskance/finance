@@ -4,6 +4,7 @@ aiohttp==3.13.4
 aiosignal==1.4.0
 annotated-doc==0.0.4
 annotated-types==0.7.0
+anthropic==0.109.1
 anyio==4.13.0
 attrs==26.1.0
 beautifulsoup4==4.14.3
@@ -31,8 +32,8 @@ isort==8.0.1
 itsdangerous==2.2.0
 Jinja2==3.1.6
 kiwisolver==1.5.0
-lxml==6.0.2
 lxml_html_clean==0.4.4
+lxml==6.0.2
 markdown-it-py==4.0.0
 markdown2==2.5.5
 MarkupSafe==3.0.3
@@ -53,8 +54,8 @@ plotly==6.6.0
 propcache==0.4.1
 protobuf==7.34.1
 pycparser==3.0
-pydantic==2.12.5
 pydantic_core==2.41.5
+pydantic==2.12.5
 pyfredapi==0.10.2
 Pygments==2.19.2
 pyparsing==3.3.2
@@ -72,8 +73,8 @@ six==1.17.0
 soupsieve==2.8.3
 SQLAlchemy==2.0.48
 starlette==1.0.0
-typing-inspection==0.4.2
 typing_extensions==4.15.0
+typing-inspection==0.4.2
 tzdata==2025.3
 urllib3==2.6.3
 uvicorn==0.42.0

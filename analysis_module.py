@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -11,6 +12,7 @@ from urllib import request as urlrequest
 
 import yfinance as yf
 
+import claude_client
 from institutional import get_institutional_ownership
 from positions import load_portfolio_positions
 
@@ -18,12 +20,6 @@ from positions import load_portfolio_positions
 # ---------------------------------------------------------------------------
 # Tool definitions exposed to the Claude tool-use API
 # ---------------------------------------------------------------------------
-_MODEL_ALIASES: dict[str, str] = {
-    "opus":    "claude-opus-4-6",
-    "sonnet":  "claude-sonnet-4-6",
-    "haiku":   "claude-haiku-4-5-20251001",
-}
-
 _CLAUDE_TOOLS: list[dict] = [
     {
         "name": "get_institutional_ownership",
@@ -200,35 +196,43 @@ class PortfolioAnalysisEngine:
             "COLLECTIVE_INVESTMENT",
         }
 
-    def _classify_symbol(
-        self, symbol: str
-    ) -> tuple[str | None, str | None, str]:
-        if symbol in self._class_cache:
-            return self._class_cache[symbol]
+    def _classify_symbols(self, symbols: list[str]) -> None:
+        """Fetch sector/industry for *symbols* concurrently and cache them."""
+        missing = sorted({s for s in symbols if s not in self._class_cache})
+        if not missing:
+            return
 
-        try:
-            info = yf.Ticker(symbol).info
-            sector = info.get("sector")
-            industry = info.get("industry")
-            status = "ok" if sector or industry else "missing"
-            result = (
-                str(sector) if sector else None,
-                str(industry) if industry else None,
-                status,
-            )
-        except Exception:
-            result = (None, None, "error")
+        def fetch(symbol: str) -> tuple[str, tuple[str | None, str | None, str]]:
+            try:
+                info = yf.Ticker(symbol).info
+                sector = info.get("sector")
+                industry = info.get("industry")
+                status = "ok" if sector or industry else "missing"
+                return symbol, (
+                    str(sector) if sector else None,
+                    str(industry) if industry else None,
+                    status,
+                )
+            except Exception:
+                return symbol, (None, None, "error")
 
-        self._class_cache[symbol] = result
-        return result
+        with ThreadPoolExecutor(max_workers=min(8, len(missing))) as pool:
+            for symbol, result in pool.map(fetch, missing):
+                self._class_cache[symbol] = result
 
     def _enrich_classification(self) -> None:
-        for rec in self._snapshot:
-            if not self._is_equity_like(rec):
-                continue
-            if rec.sector or rec.industry:
-                continue
-            sector, industry, status = self._classify_symbol(rec.symbol)
+        pending = [
+            rec
+            for rec in self._snapshot
+            if self._is_equity_like(rec) and not (rec.sector or rec.industry)
+        ]
+        if not pending:
+            return
+        self._classify_symbols([rec.symbol for rec in pending])
+        for rec in pending:
+            sector, industry, status = self._class_cache.get(
+                rec.symbol, (None, None, "error")
+            )
             rec.sector = sector
             rec.industry = industry
             rec.classification_status = status
@@ -376,104 +380,6 @@ class PortfolioAnalysisEngine:
             "rows": rows,
         }
 
-    def _call_claude(
-        self,
-        question: str,
-        model: str,
-        grounded_only: bool,
-        general_mode: bool = False,
-    ) -> str:
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        if not api_key:
-            return "Missing ANTHROPIC_API_KEY in environment."
-
-        snapshot = self._snapshot_payload()
-
-        if general_mode:
-            system = (
-                "You are a helpful financially awareassistant. You have access to the user's "
-                "portfolio data for context when relevant. "
-                "Be concise and include concrete symbols/values when available."
-            )
-        else:
-            grounding = (
-                "Answer ONLY using the provided portfolio snapshot data. "
-                "If the answer is not present in the data, say so explicitly."
-                if grounded_only
-                else "You may answer generally, but prioritize the "
-                "provided portfolio snapshot when relevant."
-            )
-            system = (
-                "You are a portfolio analysis assistant. "
-                f"{grounding} "
-                "Be concise and include concrete symbols/values when available."
-            )
-
-        user_text = (
-            f"Here is my current portfolio for reference:\n"
-            f"{json.dumps(snapshot, indent=2)}\n\n{question}"
-            if general_mode
-            else f"Portfolio snapshot JSON:\n{json.dumps(snapshot, indent=2)}"
-            f"\n\nQuestion: {question}"
-        )
-
-        resolved = _MODEL_ALIASES.get(model.strip().lower(), model.strip())
-        candidate_models = [resolved, "claude-sonnet-4-6"]
-        unique_models: list[str] = []
-        for item in candidate_models:
-            if item and item not in unique_models:
-                unique_models.append(item)
-
-        last_error = ""
-        for candidate in unique_models:
-            payload = {
-                "model": candidate,
-                "max_tokens": 1200,
-                "system": system,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": user_text,
-                    }
-                ],
-            }
-
-            req = urlrequest.Request(
-                url="https://api.anthropic.com/v1/messages",
-                data=json.dumps(payload).encode("utf-8"),
-                headers={
-                    "content-type": "application/json",
-                    "x-api-key": api_key,
-                    "anthropic-version": "2023-06-01",
-                },
-                method="POST",
-            )
-
-            try:
-                with urlrequest.urlopen(req, timeout=45) as response:
-                    body = json.loads(response.read().decode("utf-8"))
-                    content = body.get("content") or []
-                    for item in content:
-                        if (
-                            isinstance(item, dict)
-                            and item.get("type") == "text"
-                        ):
-                            if text := item.get("text"):
-                                return str(text)
-                    return str(body)
-            except urlerror.HTTPError as exc:
-                detail = exc.read().decode("utf-8", errors="ignore")
-                last_error = f"Claude API error ({exc.code}): {detail}"
-                if exc.code == 404 and "model" in detail.lower():
-                    continue
-                return last_error
-            except Exception as exc:
-                return f"Claude API call failed: {exc}"
-
-        return (
-            last_error or "Claude API call failed: no usable model configured."
-        )
-
     # ------------------------------------------------------------------
     # Tool execution
     # ------------------------------------------------------------------
@@ -532,16 +438,12 @@ class PortfolioAnalysisEngine:
         Returns (answer_text, tool_results) where tool_results maps
         tool name → raw result data (e.g. {"get_institutional_ownership": [...]}).
         """
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        if not api_key:
-            return "Missing ANTHROPIC_API_KEY in environment.", {}
-
         snapshot = self._snapshot_payload()
 
         if general_mode:
             system = (
-                "You are a helpful assistant. You have access to the user's "
-                "portfolio data for context when relevant. "
+                "You are a helpful financially aware assistant. You have access "
+                "to the user's portfolio data for context when relevant. "
                 "Be concise and include concrete symbols/values when available."
             )
         else:
@@ -566,102 +468,18 @@ class PortfolioAnalysisEngine:
             f"{json.dumps(snapshot, indent=2)}\n\nQuestion: {question}"
         )
 
-        resolved = _MODEL_ALIASES.get(model.strip().lower(), model.strip())
-        candidate_models = [resolved, "claude-sonnet-4-6"]
-        unique_models: list[str] = []
-        for m in candidate_models:
-            if m and m not in unique_models:
-                unique_models.append(m)
+        try:
+            result = claude_client.run_tool_loop(
+                [{"role": "user", "content": user_text}],
+                system=system,
+                tools=_CLAUDE_TOOLS,
+                execute_tool=self._execute_tool,
+                model=model,
+            )
+        except Exception as exc:
+            return f"Claude API call failed: {exc}", {}
 
-        last_error = ""
-        headers = {
-            "content-type": "application/json",
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-        }
-
-        tool_results: dict[str, Any] = {}
-        messages: list[dict] = [{"role": "user", "content": user_text}]
-
-        for candidate in unique_models:
-            messages = [{"role": "user", "content": user_text}]
-            tool_results = {}
-            last_error = ""
-
-            # Tool-use loop — at most 5 round-trips
-            for _ in range(5):
-                payload = {
-                    "model": candidate,
-                    "max_tokens": 1500,
-                    "system": system,
-                    "messages": messages,
-                    "tools": _CLAUDE_TOOLS,
-                }
-                req = urlrequest.Request(
-                    url="https://api.anthropic.com/v1/messages",
-                    data=json.dumps(payload).encode("utf-8"),
-                    headers=headers,
-                    method="POST",
-                )
-                try:
-                    with urlrequest.urlopen(req, timeout=60) as response:
-                        body = json.loads(response.read().decode("utf-8"))
-                except urlerror.HTTPError as exc:
-                    detail = exc.read().decode("utf-8", errors="ignore")
-                    last_error = f"Claude API error ({exc.code}): {detail}"
-                    if exc.code == 404 and "model" in detail.lower():
-                        break  # try next candidate model
-                    return last_error, tool_results
-                except Exception as exc:
-                    return f"Claude API call failed: {exc}", tool_results
-
-                stop_reason = body.get("stop_reason")
-                content = body.get("content", [])
-
-                if stop_reason != "tool_use":
-                    # Final text response
-                    for item in content:
-                        if (
-                            isinstance(item, dict)
-                            and item.get("type") == "text"
-                            and item.get("text")
-                        ):
-                            return str(item["text"]), tool_results
-                    return str(body), tool_results
-
-                # Claude wants to call a tool
-                messages.append({"role": "assistant", "content": content})
-
-                tool_result_content: list[dict] = []
-                for block in content:
-                    if (
-                        not isinstance(block, dict)
-                        or block.get("type") != "tool_use"
-                    ):
-                        continue
-                    name = block["name"]
-                    result = self._execute_tool(name, block.get("input", {}))
-                    tool_results[name] = result
-                    tool_result_content.append(
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": block["id"],
-                            "content": json.dumps(result),
-                        }
-                    )
-
-                messages.append(
-                    {"role": "user", "content": tool_result_content}
-                )
-
-            if last_error:
-                continue  # try next candidate model
-            return "Tool-use loop exceeded maximum iterations.", tool_results
-
-        return (
-            last_error or "Claude API call failed: no usable model configured.",
-            tool_results,
-        )
+        return result.text, result.tool_results
 
     def _call_perplexity(
         self,
@@ -759,7 +577,7 @@ class PortfolioAnalysisEngine:
                 q, use_model, grounded_only, general_mode
             )
         else:
-            use_model = model.strip() or "claude-sonnet-4-20250514"
+            use_model = model.strip() or claude_client.DEFAULT_MODEL
             answer, tool_results = self._call_claude_with_tools(
                 q, use_model, grounded_only, general_mode
             )
