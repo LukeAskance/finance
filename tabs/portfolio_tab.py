@@ -43,6 +43,7 @@ def build(
         high: str = "-",
         low: str = "-",
         close: str = "-",
+        div_yield: str = "-",
     ) -> None:
         _refs["last_value"].text = last
         _refs["bid_value"].text = bid
@@ -51,6 +52,7 @@ def build(
         _refs["high_value"].text = high
         _refs["low_value"].text = low
         _refs["close_value"].text = close
+        _refs["yield_value"].text = div_yield
 
     def _quote_number(quote_data: dict[str, Any], *keys: str) -> str:
         for key in keys:
@@ -88,7 +90,9 @@ def build(
                 return
 
             symbol_key = symbol.upper()
-            quote_data = result.get(symbol_key, {}).get("quote", {})
+            symbol_result = result.get(symbol_key, {})
+            quote_data = symbol_result.get("quote", {})
+            fundamental_data = symbol_result.get("fundamental", {})
             _set_quote_summary(
                 _quote_number(quote_data, "lastPrice", "mark"),
                 _quote_number(quote_data, "bidPrice", "bid"),
@@ -97,6 +101,7 @@ def build(
                 _quote_number(quote_data, "highPrice", "high"),
                 _quote_number(quote_data, "lowPrice", "low"),
                 _quote_number(quote_data, "closePrice", "close"),
+                _quote_number(fundamental_data, "divYield", "dividendYield"),
             )
             _refs["quote_output"].value = json.dumps(result, indent=2)
         except Exception as exc:
@@ -162,19 +167,19 @@ def build(
                         _refs["low_value"] = ui.label("-").classes("font-semibold")
                         ui.label("Close:")
                         _refs["close_value"] = ui.label("-").classes("font-semibold")
+                        ui.label("Yield:")
+                        _refs["yield_value"] = ui.label("-").classes("font-semibold")
 
                     _refs["quote_output"] = ui.textarea(label="Quote JSON")
                     _refs["quote_output"].props("readonly").classes("w-full")
 
-                with ui.card().classes("w-full"):
-                    ui.label("Portfolio Actions").classes("text-xl font-semibold")
-                    _refs["aggregate_button"] = ui.button(
-                        "Aggregate", on_click=toggle_aggregate_click
-                    )
-
             with ui.column().classes("flex-1 min-w-0"):
                 with ui.card().classes("w-full"):
-                    ui.label("Portfolio").classes("text-xl font-semibold")
+                    with ui.row().classes("w-full items-center gap-4"):
+                        ui.label("Portfolio").classes("text-xl font-semibold")
+                        _refs["aggregate_button"] = ui.button(
+                            "Aggregate", on_click=toggle_aggregate_click
+                        )
                     portfolio_columns = [
                         {
                             "name": "symbol",
