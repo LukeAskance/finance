@@ -243,14 +243,14 @@ async def ensure_portfolio_snapshot(
     datecode = datetime.now().strftime("%y%m%d")
     csv_dir = os.getenv("JiminyFinanceDir", os.path.dirname(__file__))
     csv_path = os.path.join(csv_dir, f"Portfolio-{datecode}.csv")
-    aggregated = aggregate_rows_by_symbol(rows)
-    symbols = [r["symbol"] for r in aggregated]
+    symbols = [r["symbol"] for r in rows]
     company_names = await asyncio.to_thread(_fetch_company_names, symbols)
     with open(csv_path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["symbol", "company_name", "share_quantity", "latest_price", "market_value"])
-        for row in aggregated:
-            writer.writerow([row["symbol"], company_names.get(row["symbol"], ""), row["quantity"], row["last"], row["market_value"]])
+        writer.writerow(["symbol", "company_name", "account", "share_quantity", "latest_price", "market_value", "cost_basis"])
+        for row in rows:
+            cost_basis = round(float(row.get("market_value", 0.0)) - float(row.get("pl", 0.0)), 2)
+            writer.writerow([row["symbol"], company_names.get(row["symbol"], ""), row.get("account", ""), row["quantity"], row["last"], row["market_value"], cost_basis])
 
     return portfolio_snapshot_positions, portfolio_snapshot_rows
 
