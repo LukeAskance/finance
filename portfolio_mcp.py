@@ -72,6 +72,8 @@ def get_portfolio_positions(
     """
     Return all positions from the most-recent portfolio snapshot stored in the
     local SQLite database, aggregated across accounts, sorted by market value.
+    Each position includes cost_basis (total dollars paid; may be null for
+    snapshots taken before basis tracking was added).
 
     Args:
         min_market_value: Only return positions with market value >= this amount.
@@ -92,7 +94,8 @@ def get_portfolio_positions(
                 i.name        AS description,
                 SUM(s.market_value) AS market_value,
                 SUM(s.quantity)     AS quantity,
-                s.last_price
+                s.last_price,
+                SUM(s.cost_basis)   AS cost_basis
             FROM daily_position_snapshots s
             JOIN instruments i ON i.id = s.instrument_id
             WHERE s.date = ?
@@ -110,6 +113,7 @@ def get_portfolio_positions(
             r["as_of"] = snap_date
             r["market_value"] = round(r["market_value"], 2)
             r["quantity"] = round(r["quantity"], 4)
+            r["cost_basis"] = round(r["cost_basis"], 2) if r["cost_basis"] is not None else None
 
         log.info("get_portfolio_positions → %d rows (as_of %s)", len(result), snap_date)
         return result
@@ -120,6 +124,8 @@ def get_positions_by_account(account_name: str = "") -> list[dict]:
     """
     Return positions broken out per account from the most-recent snapshot.
     Optionally filter to a single account (partial name match, case-insensitive).
+    Each position includes cost_basis (total dollars paid; may be null for
+    snapshots taken before basis tracking was added).
 
     Args:
         account_name: Partial account name to filter by, e.g. 'Roth'. Leave
@@ -139,7 +145,8 @@ def get_positions_by_account(account_name: str = "") -> list[dict]:
                 i.instrument_type,
                 s.quantity,
                 s.market_value,
-                s.last_price
+                s.last_price,
+                s.cost_basis
             FROM daily_position_snapshots s
             JOIN instruments i ON i.id = s.instrument_id
             JOIN accounts   a ON a.id = s.account_id
@@ -157,6 +164,7 @@ def get_positions_by_account(account_name: str = "") -> list[dict]:
             r["as_of"] = snap_date
             r["market_value"] = round(r["market_value"], 2)
             r["quantity"] = round(r["quantity"], 4)
+            r["cost_basis"] = round(r["cost_basis"], 2) if r["cost_basis"] is not None else None
 
         log.info("get_positions_by_account → %d rows (as_of %s)", len(result), snap_date)
         return result

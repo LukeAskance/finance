@@ -141,6 +141,7 @@ class DailyPositionSnapshot(Base):
     market_value: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     last_price: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     average_cost: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cost_basis: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
 class MarketIndicatorSnapshot(Base):
@@ -166,6 +167,11 @@ def init_db(db_path: str) -> None:
         cols = {row[1] for row in conn.execute(text("PRAGMA table_info(market_indicator_snapshots)"))}
         if "gld" not in cols:
             conn.execute(text("ALTER TABLE market_indicator_snapshots ADD COLUMN gld REAL"))
+            conn.commit()
+
+        pos_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(daily_position_snapshots)"))}
+        if "cost_basis" not in pos_cols:
+            conn.execute(text("ALTER TABLE daily_position_snapshots ADD COLUMN cost_basis REAL"))
             conn.commit()
 
 
@@ -246,6 +252,7 @@ def _write_snapshot_rows(
         quantity = _coerce_float(getattr(p, "quantity", 0.0))
         market_value = _coerce_float(getattr(p, "market_value", 0.0))
         last_price = _coerce_float(getattr(p, "last_price", 0.0))
+        cost_basis = market_value - _coerce_float(getattr(p, "pl_total", 0.0))
 
         key = (account.id, instrument.id)
         rolled = rolled_positions.setdefault(
@@ -256,11 +263,13 @@ def _write_snapshot_rows(
                 "quantity": 0.0,
                 "market_value": 0.0,
                 "last_price": 0.0,
+                "cost_basis": 0.0,
             },
         )
         rolled["quantity"] += quantity
         rolled["market_value"] += market_value
         rolled["last_price"] = last_price
+        rolled["cost_basis"] += cost_basis
         position_count += 1
 
         totals = account_totals.setdefault(
@@ -282,6 +291,7 @@ def _write_snapshot_rows(
                 market_value=rolled["market_value"],
                 last_price=rolled["last_price"],
                 average_cost=None,
+                cost_basis=rolled["cost_basis"],
             )
             .on_conflict_do_update(
                 index_elements=["date", "account_id", "instrument_id"],
@@ -290,6 +300,7 @@ def _write_snapshot_rows(
                     "market_value": rolled["market_value"],
                     "last_price": rolled["last_price"],
                     "average_cost": None,
+                    "cost_basis": rolled["cost_basis"],
                 },
             )
         )
