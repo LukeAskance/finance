@@ -421,6 +421,7 @@ async def exit_app_click():
 
 _portfolio_refs: dict[str, Any] = {}
 _analysis_refs: dict[str, Any] = {}
+_historicals_refs: dict[str, Any] = {}
 
 
 async def refresh_portfolio_snapshot_click() -> None:
@@ -462,10 +463,23 @@ async def refresh_portfolio_snapshot_click() -> None:
             portfolio_prev_value.text = "no snapshot in DB"
             portfolio_change_value.text = "—"
 
+        # Persist today's snapshot to the historicals DB (after the
+        # day-over-day comparison above, which reads the prior snapshot).
+        capture = await asyncio.to_thread(
+            historicals_store.capture_snapshot_from_loaded_positions,
+            list(positions),
+        )
+
+        # Re-render the Historicals totals charts now that a new snapshot exists.
+        refresh_totals = _historicals_refs.get("refresh_totals")
+        if refresh_totals:
+            await refresh_totals()
+
         portfolio_snapshot_status_value.text = (
             f"Refresh successful: {len(positions)} positions, "
             f"{len(rows)} rows @ "
             f'{portfolio_snapshot_as_of.strftime("%Y-%m-%d %H:%M:%S")}'
+            f" (DB: {capture['positions']} positions saved for {capture['date']})"
         )
         ui.notify(
             f"Refreshed shared snapshot: {len(positions)} positions",
@@ -553,12 +567,13 @@ with ui.tab_panels(tabs, value=dashboard_tab).classes("w-full"):
 
     options_tab_mod.build(options_tab, fetch_chain)
 
-    historicals_tab_mod.build(
-        historicals_tab,
-        ensure_portfolio_snapshot,
-        get_api,
-        historicals_store,
-        utilities,
+    _historicals_refs.update(
+        historicals_tab_mod.build(
+            historicals_tab,
+            get_api,
+            historicals_store,
+            utilities,
+        )
     )
 
     income_tab_mod.build(

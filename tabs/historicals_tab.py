@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 from typing import Any
 
 from nicegui import ui
@@ -23,15 +22,19 @@ def _coerce_int(value: Any) -> int | None:
         return None
 
 
-def build(panel_ref, ensure_snapshot_fn, get_api_fn, historicals_store, utilities) -> None:
+def build(panel_ref, get_api_fn, historicals_store, utilities) -> dict[str, Any]:
     """Build the Historicals tab UI.
 
     Args:
         panel_ref: The ui.tab widget returned by ui.tab("Historicals").
-        ensure_snapshot_fn: async callable() -> (positions, rows).
         get_api_fn: callable() -> SchwabAPI.
         historicals_store: the historicals_store module.
         utilities: the utilities module.
+
+    Returns:
+        A dict of cross-tab hooks, e.g. ``refresh_totals`` — an async callable
+        that re-renders the portfolio/account totals charts. The Portfolio-tab
+        refresh handler calls this after persisting a new snapshot.
     """
     _refs: dict[str, Any] = {}
 
@@ -164,27 +167,6 @@ def build(panel_ref, ensure_snapshot_fn, get_api_fn, historicals_store, utilitie
             _refs["refresh_button"].text = "Display Totals"
             _refs["refresh_button"].enable()
 
-    async def capture_snapshot_click() -> None:
-        _refs["capture_button"].disable()
-        _refs["capture_button"].text = "Fetching..."
-        try:
-            positions, _ = await ensure_snapshot_fn(force_refresh=False)
-            utc_today = datetime.now(timezone.utc).date()
-            result = await asyncio.to_thread(
-                historicals_store.capture_snapshot_from_loaded_positions,
-                positions, utc_today,
-            )
-            _refs["status_value"].text = (
-                f"Fetched UTC {result['date']} "
-                f"({result['positions']} positions, {result['accounts']} accounts)"
-            )
-            await refresh_totals_click()
-        except Exception as exc:
-            _refs["status_value"].text = f"Snapshot fetch error: {exc}"
-        finally:
-            _refs["capture_button"].text = "Fetch Daily Snapshot (UTC)"
-            _refs["capture_button"].enable()
-
     # ------------------------------------------------------------------
     # UI
     # ------------------------------------------------------------------
@@ -216,9 +198,6 @@ def build(panel_ref, ensure_snapshot_fn, get_api_fn, historicals_store, utilitie
             with ui.card().classes("w-full"):
                 ui.label("Portfolio History (UTC Daily Snapshots)").classes("text-xl font-semibold")
                 with ui.row().classes("items-center gap-3 w-full"):
-                    _refs["capture_button"] = ui.button(
-                        "Fetch Daily Snapshot (UTC)", on_click=capture_snapshot_click
-                    )
                     _refs["totals_days_input"] = (
                         ui.input("Lookback days", value="365")
                         .props("type=number min=1")
@@ -231,3 +210,5 @@ def build(panel_ref, ensure_snapshot_fn, get_api_fn, historicals_store, utilitie
 
                 _refs["totals_host"] = ui.column().classes("w-full")
                 _refs["accounts_host"] = ui.column().classes("w-full")
+
+    return {"refresh_totals": refresh_totals_click}
