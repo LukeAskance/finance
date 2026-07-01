@@ -23,8 +23,14 @@ TOOLS: list[dict] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "min_market_value": {"type": "number", "description": "Only include positions with market value >= this amount. Default 0."},
-                "instrument_type": {"type": "string", "description": "Filter by type: 'equity', 'fund', 'cash', 'option'. Leave blank for all."},
+                "min_market_value": {
+                    "type": "number",
+                    "description": "Only include positions with market value >= this amount. Default 0.",
+                },
+                "instrument_type": {
+                    "type": "string",
+                    "description": "Filter by type: 'equity', 'fund', 'cash', 'option'. Leave blank for all.",
+                },
             },
         },
     },
@@ -34,7 +40,10 @@ TOOLS: list[dict] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "account_name": {"type": "string", "description": "Partial account name to filter by (case-insensitive). Leave blank for all accounts."},
+                "account_name": {
+                    "type": "string",
+                    "description": "Partial account name to filter by (case-insensitive). Leave blank for all accounts.",
+                },
             },
         },
     },
@@ -44,7 +53,10 @@ TOOLS: list[dict] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "days": {"type": "integer", "description": "Number of calendar days of history. Default 90."},
+                "days": {
+                    "type": "integer",
+                    "description": "Number of calendar days of history. Default 90.",
+                },
             },
         },
     },
@@ -54,7 +66,10 @@ TOOLS: list[dict] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "days": {"type": "integer", "description": "Number of calendar days of history. Default 30."},
+                "days": {
+                    "type": "integer",
+                    "description": "Number of calendar days of history. Default 30.",
+                },
             },
         },
     },
@@ -64,7 +79,10 @@ TOOLS: list[dict] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "ticker": {"type": "string", "description": "Stock ticker symbol, e.g. 'AAPL'."},
+                "ticker": {
+                    "type": "string",
+                    "description": "Stock ticker symbol, e.g. 'AAPL'.",
+                },
             },
             "required": ["ticker"],
         },
@@ -75,8 +93,14 @@ TOOLS: list[dict] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "ticker": {"type": "string", "description": "Stock ticker symbol."},
-                "lookback_days": {"type": "integer", "description": "Days of history to scan. Default 365."},
+                "ticker": {
+                    "type": "string",
+                    "description": "Stock ticker symbol.",
+                },
+                "lookback_days": {
+                    "type": "integer",
+                    "description": "Days of history to scan. Default 365.",
+                },
             },
             "required": ["ticker"],
         },
@@ -87,7 +111,10 @@ TOOLS: list[dict] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "ticker": {"type": "string", "description": "Stock ticker symbol."},
+                "ticker": {
+                    "type": "string",
+                    "description": "Stock ticker symbol.",
+                },
             },
             "required": ["ticker"],
         },
@@ -98,9 +125,18 @@ TOOLS: list[dict] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "ticker": {"type": "string", "description": "Stock ticker symbol."},
-                "shares": {"type": "number", "description": "Number of shares held."},
-                "years": {"type": "integer", "description": "Forecast horizon in years. Default 3."},
+                "ticker": {
+                    "type": "string",
+                    "description": "Stock ticker symbol.",
+                },
+                "shares": {
+                    "type": "number",
+                    "description": "Number of shares held.",
+                },
+                "years": {
+                    "type": "integer",
+                    "description": "Forecast horizon in years. Default 3.",
+                },
             },
             "required": ["ticker", "shares"],
         },
@@ -111,8 +147,14 @@ TOOLS: list[dict] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "ticker": {"type": "string", "description": "Stock ticker symbol."},
-                "days": {"type": "integer", "description": "Number of calendar days of history. Default 90."},
+                "ticker": {
+                    "type": "string",
+                    "description": "Stock ticker symbol.",
+                },
+                "days": {
+                    "type": "integer",
+                    "description": "Number of calendar days of history. Default 90.",
+                },
             },
             "required": ["ticker"],
         },
@@ -135,19 +177,24 @@ _GATHER_SYSTEM = (
 # Tool dispatch
 # ---------------------------------------------------------------------------
 
+
 def _execute_tool(name: str, tool_input: dict) -> Any:
     import portfolio_mcp as _mcp
+
     fn = getattr(_mcp, name, None)
-    if fn is None:
-        return {"error": f"Unknown tool: {name}"}
-    return fn(**tool_input)
+    return (
+        {"error": f"Unknown tool: {name}"} if fn is None else fn(**tool_input)
+    )
 
 
 # ---------------------------------------------------------------------------
 # LLM callers (shared tool-use loop lives in claude_client.py)
 # ---------------------------------------------------------------------------
 
-def _call_claude(messages: list[dict], model: str = claude_client.DEFAULT_MODEL) -> str:
+
+def _call_claude(
+    messages: list[dict], model: str = claude_client.DEFAULT_MODEL
+) -> str:
     result = claude_client.run_tool_loop(
         list(messages),
         system=SYSTEM,
@@ -174,7 +221,10 @@ def _call_perplexity(messages: list[dict], api_key: str, model: str) -> str:
         except Exception:
             summaries = []
         if summaries:
-            tool_context = "\n\nLive data gathered from portfolio tools:\n" + "\n".join(summaries)
+            tool_context = (
+                "\n\nLive data gathered from portfolio tools:\n"
+                + "\n".join(summaries)
+            )
 
     question = next(
         (m["content"] for m in reversed(messages) if m["role"] == "user"), ""
@@ -205,12 +255,15 @@ def _call_perplexity(messages: list[dict], api_key: str, model: str) -> str:
             return str(body)
     except urlerror.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="ignore")
-        raise RuntimeError(f"Perplexity API error ({exc.code}): {detail}") from exc
+        raise RuntimeError(
+            f"Perplexity API error ({exc.code}): {detail}"
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
 # Tab build
 # ---------------------------------------------------------------------------
+
 
 def build(panel_ref) -> None:
     import asyncio
@@ -244,7 +297,9 @@ def build(panel_ref) -> None:
                 if provider == "perplexity":
                     api_key = os.getenv("PERPLEXITY_API_KEY")
                     if not api_key:
-                        ui.notify("PERPLEXITY_API_KEY not set", color="negative")
+                        ui.notify(
+                            "PERPLEXITY_API_KEY not set", color="negative"
+                        )
                         return
                 else:
                     api_key = os.getenv("ANTHROPIC_API_KEY")
@@ -254,7 +309,9 @@ def build(panel_ref) -> None:
 
                 chat_input.value = ""
                 with chat_column:
-                    ui.chat_message(text=user_text, name="You", sent=True).classes("w-full")
+                    ui.chat_message(
+                        text=user_text, name="You", sent=True
+                    ).classes("w-full")
                 send_button.disable()
                 send_button.text = "..."
                 history.append({"role": "user", "content": user_text})
@@ -266,11 +323,15 @@ def build(panel_ref) -> None:
                         )
                     else:
                         answer = await asyncio.to_thread(
-                            _call_claude, list(history), claude_client.DEFAULT_MODEL
+                            _call_claude,
+                            list(history),
+                            claude_client.DEFAULT_MODEL,
                         )
                     history.append({"role": "assistant", "content": answer})
                     with chat_column:
-                        ui.chat_message(text=answer, name="Assistant", sent=False).classes("w-full")
+                        ui.chat_message(
+                            text=answer, name="Assistant", sent=False
+                        ).classes("w-full")
                 except Exception as exc:
                     ui.notify(f"MCP chat error: {exc}", color="negative")
                 finally:
@@ -282,9 +343,15 @@ def build(panel_ref) -> None:
                 history.clear()
 
             with ui.row().classes("w-full items-center gap-2 mt-1"):
-                chat_input = ui.input(
-                    placeholder="e.g. What are my top 5 positions and insider activity for each?",
-                ).classes("flex-1").on("keydown.enter", send_click)
+                chat_input = (
+                    ui.input(
+                        placeholder="e.g. What are my top 5 positions and insider activity for each?",
+                    )
+                    .classes("flex-1")
+                    .on("keydown.enter", send_click)
+                )
                 send_button = ui.button("Send", on_click=send_click)
 
-            ui.button("Clear conversation", on_click=clear_click).props("flat dense")
+            ui.button("Clear conversation", on_click=clear_click).props(
+                "flat dense"
+            )
