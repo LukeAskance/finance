@@ -22,6 +22,7 @@ from analysis_module import PortfolioAnalysisEngine
 from positions import load_portfolio_positions
 from schwab_api import SchwabAPI
 
+import tabs.alerts_tab as alerts_tab_mod
 import tabs.analysis_tab as analysis_tab_mod
 import tabs.fred_tab as fred_tab_mod
 import tabs.historicals_tab as historicals_tab_mod
@@ -515,6 +516,7 @@ with ui.tabs().classes("w-full") as tabs:
     analysis_tab = ui.tab("Analysis")
     fred_tab = ui.tab("Fred")
     mcp_tab = ui.tab("MCP")
+    alerts_tab = ui.tab("Alerts")
 
 with ui.tab_panels(tabs, value=dashboard_tab).classes("w-full"):
     with ui.tab_panel(dashboard_tab):
@@ -597,5 +599,7 @@ with ui.tab_panels(tabs, value=dashboard_tab).classes("w-full"):
     fred_tab_mod.build(fred_tab)
 
     mcp_tab_mod.build(mcp_tab)
+
+    alerts_tab_mod.build(alerts_tab)
 
 ui.run(port=8000, reload=False)

@@ -154,6 +154,28 @@ class MarketIndicatorSnapshot(Base):
     gld: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
+class Alert(Base):
+    """A user-authored note ('let me know when GHF yield tops 6%'), classified
+    by the LLM into an active_alert (cheap poll, no LLM), a standing_question
+    (open-ended, re-answered on demand), or needs_tool (no data source exists
+    yet — surfaced to the user rather than guessed at)."""
+
+    __tablename__ = "alerts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    note_text: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    ticker: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    metric: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    op: Mapped[str | None] = mapped_column(String(4), nullable=True)
+    threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_result: Mapped[str | None] = mapped_column(Text, nullable=True)
+    triggered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 _engine = None
 _SessionLocal: sessionmaker[Session] | None = None
 
@@ -486,3 +508,68 @@ def get_totals_payload(days: int = 365) -> dict[str, Any]:
         "account_rows": account_rows,
         "account_series": account_series,
     }
+
+
+def add_alert(
+    note_text: str,
+    status: str,
+    ticker: str | None = None,
+    metric: str | None = None,
+    op: str | None = None,
+    threshold: float | None = None,
+    summary: str | None = None,
+) -> int:
+    with session_scope() as session:
+        row = Alert(
+            note_text=note_text,
+            created_at=datetime.now(timezone.utc),
+            status=status,
+            ticker=ticker,
+            metric=metric,
+            op=op,
+            threshold=threshold,
+            summary=summary,
+        )
+        session.add(row)
+        session.flush()
+        return row.id
+
+
+def list_alerts() -> list[dict[str, Any]]:
+    with session_scope() as session:
+        rows = session.execute(
+            select(Alert).order_by(Alert.created_at.desc())
+        ).scalars().all()
+        return [
+            {
+                "id": r.id,
+                "note_text": r.note_text,
+                "created_at": r.created_at,
+                "status": r.status,
+                "ticker": r.ticker,
+                "metric": r.metric,
+                "op": r.op,
+                "threshold": r.threshold,
+                "summary": r.summary,
+                "last_checked_at": r.last_checked_at,
+                "last_result": r.last_result,
+                "triggered_at": r.triggered_at,
+            }
+            for r in rows
+        ]
+
+
+def record_alert_check(alert_id: int, last_result: str, triggered: bool) -> None:
+    with session_scope() as session:
+        row = session.get(Alert, alert_id)
+        if row is None:
+            return
+        row.last_checked_at = datetime.now(timezone.utc)
+        row.last_result = last_result
+        if triggered and row.triggered_at is None:
+            row.triggered_at = datetime.now(timezone.utc)
+
+
+def delete_alert(alert_id: int) -> None:
+    with session_scope() as session:
+        session.execute(delete(Alert).where(Alert.id == alert_id))
