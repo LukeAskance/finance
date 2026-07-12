@@ -478,20 +478,22 @@ def _discover_fidelity_position_seeds(
     fidelity_cash = 0.0
     with open(portfolio_csv) as f:
         reader = csv.reader(f)
-        headings = next(reader)
+        # ponytail: Fidelity has changed header casing between exports before; normalize
+        # to lowercase so a future casing tweak doesn't silently zero out cost basis again.
+        headings = [h.strip().lower() for h in next(reader)]
 
         for row in csv.DictReader(f, fieldnames=headings):
-            symbol = str(row.get("Symbol") or "").strip().upper()
+            symbol = str(row.get("symbol") or "").strip().upper()
             if not symbol:
                 continue
 
             if symbol == "PENDING ACTIVITY":
                 continue
 
-            description = str(row.get("Description") or "").strip()
+            description = str(row.get("description") or "").strip()
 
             if symbol in {"CORE**", "FDRXX**", "SPRXX"}:
-                cash_value = _safe_float(row.get("Current Value"))
+                cash_value = _safe_float(row.get("current value"))
                 fidelity_cash += cash_value
                 if include_cash and cash_value > 0:
                     seeds.append(
@@ -509,8 +511,8 @@ def _discover_fidelity_position_seeds(
                     )
                 continue
 
-            quantity = _safe_float(row.get("Quantity"))
-            average_cost = _safe_float(row.get("Average Cost Basis"))
+            quantity = _safe_float(row.get("quantity"))
+            average_cost = _safe_float(row.get("average cost basis"))
             option_type = None
             strike_price = None
             dte = None
