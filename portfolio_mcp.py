@@ -200,6 +200,46 @@ def get_portfolio_totals(days: int = 90) -> list[dict]:
 
 
 @mcp.tool()
+def get_position_price_history(symbol: str, days: int = 30) -> list[dict]:
+    """
+    Return daily last_price/market_value history for one held position from the
+    local SQLite snapshot table (summed across accounts). Use this instead of
+    get_price_history when comparing moves across currently-held positions —
+    it's one cheap DB query instead of a live per-ticker fetch.
+
+    Args:
+        symbol: Instrument symbol, e.g. 'AAPL'.
+        days: Number of calendar days of history (default 30).
+    """
+    log.info("get_position_price_history symbol=%s days=%d", symbol, days)
+    with _db() as conn:
+        sql = """
+            SELECT
+                s.date,
+                MAX(s.last_price)     AS last_price,
+                SUM(s.market_value)   AS market_value,
+                SUM(s.quantity)       AS quantity
+            FROM daily_position_snapshots s
+            JOIN instruments i ON i.id = s.instrument_id
+            WHERE i.symbol = ? AND s.date >= date('now', ? || ' days')
+            GROUP BY s.date
+            ORDER BY s.date ASC
+        """
+        rows = conn.execute(sql, (symbol.upper(), f"-{days}")).fetchall()
+        result = [
+            {
+                "date": r["date"],
+                "last_price": round(r["last_price"], 4),
+                "market_value": round(r["market_value"], 2),
+                "quantity": round(r["quantity"], 4),
+            }
+            for r in rows
+        ]
+        log.info("get_position_price_history %s → %d rows", symbol, len(result))
+        return result
+
+
+@mcp.tool()
 def get_account_totals(days: int = 30) -> list[dict]:
     """
     Return daily market value per account over the past N days.

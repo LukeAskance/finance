@@ -58,6 +58,24 @@ TOOLS: list[dict] = [
         },
     },
     {
+        "name": "get_position_price_history",
+        "description": "Return daily last_price/market_value history for one held position from the local database (summed across accounts). Prefer this over get_price_history when comparing moves across held positions — one cheap DB query instead of a live fetch.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "symbol": {
+                    "type": "string",
+                    "description": "Instrument symbol, e.g. 'AAPL'.",
+                },
+                "days": {
+                    "type": "integer",
+                    "description": "Number of calendar days of history. Default 30.",
+                },
+            },
+            "required": ["symbol"],
+        },
+    },
+    {
         "name": "get_account_totals",
         "description": "Return daily market value per account over the past N days.",
         "input_schema": {
@@ -258,6 +276,13 @@ def build(panel_ref) -> None:
                 chat_column.clear()
                 history.clear()
 
+            def list_tools_click() -> None:
+                lines = [f"{t['name']} — {t['description']}" for t in TOOLS]
+                with chat_column:
+                    ui.chat_message(
+                        text=lines, name="Available tools", sent=False
+                    ).classes("w-full")
+
             with ui.row().classes("w-full items-center gap-2 mt-1"):
                 chat_input = (
                     ui.input(
@@ -268,6 +293,10 @@ def build(panel_ref) -> None:
                 )
                 send_button = ui.button("Send", on_click=send_click)
 
-            ui.button("Clear conversation", on_click=clear_click).props(
-                "flat dense"
-            )
+            with ui.row().classes("gap-2"):
+                ui.button("Clear conversation", on_click=clear_click).props(
+                    "flat dense"
+                )
+                ui.button("List tools", on_click=list_tools_click).props(
+                    "flat dense"
+                )
