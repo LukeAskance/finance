@@ -5,10 +5,40 @@
 
 import json
 import logging
+import time
 from datetime import datetime
 from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+
+def _call(request_fn, retries: int = 3, backoff: float = 1.0):
+    """Call request_fn() -> requests.Response, retrying on 429 (rate limit)
+    with backoff. The 16-way concurrent quote fetch in positions.py routinely
+    bursts past Schwab's per-minute limit; retrying here covers every caller.
+    """
+    for attempt in range(retries):
+        r = request_fn()
+        if r.status_code != 429:
+            return r
+        wait = float(r.headers.get("Retry-After", backoff * (2**attempt)))
+        logger.warning("Schwab API rate limited (429); retrying in %.1fs", wait)
+        time.sleep(wait)
+    return request_fn()
+
+
+def _json(r):
+    """r.json(), but on failure raise with status + body so the real
+    cause (expired session, rate limit, HTML error page) isn't hidden
+    behind a bare JSONDecodeError.
+    """
+    try:
+        return r.json()
+    except ValueError as exc:
+        raise ValueError(
+            f"Schwab API returned non-JSON (status {r.status_code}): "
+            f"{r.text[:300]!r}"
+        ) from exc
 
 
 class SchwabAPI:
@@ -21,7 +51,7 @@ class SchwabAPI:
 
     def get_linked_accounts(self) -> list:
         """Get all linked account numbers and hashes."""
-        return self.client.account_linked().json()
+        return _json(_call(self.client.account_linked))
 
     def get_account_details(
         self, account_hash: str, fields: str = "positions"
@@ -29,7 +59,9 @@ class SchwabAPI:
         """Get account details (positions, balances)
         for a single account hash.
         """
-        return self.client.account_details(account_hash, fields=fields).json()
+        return _json(
+            _call(lambda: self.client.account_details(account_hash, fields=fields))
+        )
 
     # ── Quote Domain ────────────────────────────────
 
@@ -41,13 +73,13 @@ class SchwabAPI:
         if "-" in symbol:
             return {}
 
-        r = self.client.quote(symbol)
+        r = _call(lambda: self.client.quote(symbol))
         if r.status_code == 404:
             if gabby:
                 logger.warning("get_quote(%s) got 404", symbol)
             return {}
 
-        return r.json()
+        return _json(r)
 
     def get_quote_and_fundamentals(
         self, symbol: str, gabby: bool = False
@@ -60,7 +92,7 @@ class SchwabAPI:
             return None, None
 
         symbol = symbol.upper()
-        r = self.client.quote(symbol)
+        r = _call(lambda: self.client.quote(symbol))
         if r.status_code == 404:
             if gabby:
                 logger.warning(
@@ -69,7 +101,7 @@ class SchwabAPI:
                 )
             return None, None
 
-        response_data = r.json()
+        response_data = _json(r)
 
         if symbol not in response_data:
             if gabby:
@@ -104,19 +136,21 @@ class SchwabAPI:
         gabby: bool = False,
     ) -> Optional[dict]:
         """Get historical price candles for a symbol. Returns None on 404."""
-        r = self.client.price_history(
-            symbol,
-            periodType=periodType,
-            period=period,
-            frequencyType=frequencyType,
-            frequency=frequency,
+        r = _call(
+            lambda: self.client.price_history(
+                symbol,
+                periodType=periodType,
+                period=period,
+                frequencyType=frequencyType,
+                frequency=frequency,
+            )
         )
         if r.status_code == 404:
             if gabby:
                 logger.warning("get_price_history(%s) got 404", symbol)
             return None
 
-        return r.json()
+        return _json(r)
 
     def get_transactions(
         self,
@@ -126,18 +160,18 @@ class SchwabAPI:
         types: str = "TRADE",
     ) -> list:
         """Get transactions for an account within a date range."""
-        r = self.client.transactions(account_hash, start, end, types)
-        return r.json()
+        r = _call(lambda: self.client.transactions(account_hash, start, end, types))
+        return _json(r)
 
     # ── Options Domain ──────────────────────────────
 
     def get_expiration_dates(self, symbol: str) -> list:
         """Get option expiration chain for a symbol."""
-        return self.client.option_expiration_chain(symbol).json()
+        return _json(_call(lambda: self.client.option_expiration_chain(symbol)))
 
     def get_option_chain(self, symbol: str, **kwargs) -> dict:
         """Get option chain data. Pass any option_chains() kwargs through."""
-        return self.client.option_chains(symbol, **kwargs).json()
+        return _json(_call(lambda: self.client.option_chains(symbol, **kwargs)))
 
     # ── Streaming ───────────────────────────────────
 
