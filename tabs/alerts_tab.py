@@ -24,7 +24,7 @@ def _fmt_dt(value) -> str:
     return value.strftime("%Y-%m-%d %H:%M")
 
 
-def build(panel_ref) -> None:
+def build(panel_ref) -> dict:
     with ui.tab_panel(panel_ref):
         with ui.card().classes("w-full"):
             ui.label("Alerts").classes("text-xl font-semibold")
@@ -111,7 +111,7 @@ def build(panel_ref) -> None:
             finally:
                 add_button.enable()
 
-        async def check_all_click() -> None:
+        async def check_all_click() -> bool:
             check_all_button.disable()
             check_all_button.text = "Checking…"
             try:
@@ -130,6 +130,7 @@ def build(panel_ref) -> None:
                     )
                 else:
                     ui.notify("Checked — nothing triggered.")
+                return bool(triggered_notes)
             finally:
                 check_all_button.text = "Check now"
                 check_all_button.enable()
@@ -139,3 +140,5 @@ def build(panel_ref) -> None:
             refresh_list()
 
         refresh_list()
+
+    return {"check_now": check_all_click}

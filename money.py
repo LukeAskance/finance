@@ -407,6 +407,15 @@ async def fetch_market_indicators() -> None:
         debt_date_label.set_text("")
 
 
+async def check_alerts_click():
+    check_now = _alerts_refs.get("check_now")
+    if check_now is None:
+        return
+    triggered = await check_now()
+    if triggered:
+        tabs.value = alerts_tab
+
+
 async def exit_app_click():
     ui.notify("Closing browser tab and exiting...", color="warning")
     with suppress(Exception):
@@ -423,6 +432,7 @@ async def exit_app_click():
 _portfolio_refs: dict[str, Any] = {}
 _analysis_refs: dict[str, Any] = {}
 _historicals_refs: dict[str, Any] = {}
+_alerts_refs: dict[str, Any] = {}
 
 
 async def refresh_portfolio_snapshot_click() -> None:
@@ -556,6 +566,7 @@ with ui.tab_panels(tabs, value=dashboard_tab).classes("w-full"):
                 portfolio_snapshot_status_value = ui.label(
                     "No shared snapshot loaded"
                 ).classes("text-sm")
+            ui.button("Check Alerts", on_click=check_alerts_click)
             ui.button("Exit Application", on_click=exit_app_click)
 
     _portfolio_refs.update(
@@ -600,6 +611,6 @@ with ui.tab_panels(tabs, value=dashboard_tab).classes("w-full"):
 
     mcp_tab_mod.build(mcp_tab)
 
-    alerts_tab_mod.build(alerts_tab)
+    _alerts_refs.update(alerts_tab_mod.build(alerts_tab))
 
 ui.run(port=8000, reload=False)
