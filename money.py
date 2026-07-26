@@ -52,7 +52,7 @@ SchwabClient: Any = _SchwabClient
 
 load_dotenv()
 historicals_store.init_db("/Users/george/code/money/portfolio.db")
-_prev_vix, _prev_sp500, _prev_gld = historicals_store.get_last_market_indicators()
+_prev_vix, _prev_sp500, _prev_gld, _prev_fedfunds = historicals_store.get_last_market_indicators()
 
 dark_mode = ui.dark_mode()
 dark_mode.enable()
@@ -305,7 +305,7 @@ def aggregate_rows_by_symbol(
 
 
 async def fetch_market_indicators() -> None:
-    global _prev_vix, _prev_sp500, _prev_gld
+    global _prev_vix, _prev_sp500, _prev_gld, _prev_fedfunds
 
     def _fetch():
         import httpx
@@ -337,6 +337,23 @@ async def fetch_market_indicators() -> None:
                 }
         except Exception:
             results["debt"] = None
+        try:
+            r = httpx.get(
+                "https://api.stlouisfed.org/fred/series/observations",
+                params={
+                    "series_id": "EFFR",
+                    "api_key": os.getenv("FRED_API_KEY"),
+                    "file_type": "json",
+                    "sort_order": "desc",
+                    "limit": 1,
+                },
+                timeout=10,
+            )
+            r.raise_for_status()
+            observations = r.json().get("observations") or []
+            results["fedfunds"] = float(observations[0]["value"])
+        except Exception:
+            results["fedfunds"] = None
         return results
 
     data = await asyncio.get_event_loop().run_in_executor(None, _fetch)
@@ -344,6 +361,7 @@ async def fetch_market_indicators() -> None:
     sp500_val = data.get("sp500")
     gld_val   = data.get("gld")
     debt_data = data.get("debt")
+    fedfunds_val = data.get("fedfunds")
 
     # VIX — higher is worse, so red = up
     vix_label.set_text(f"{vix_val:.2f}" if vix_val else "—")
@@ -390,11 +408,26 @@ async def fetch_market_indicators() -> None:
     if gld_val is not None:
         _prev_gld = gld_val
 
+    # Fed Funds Rate — higher is worse, so red = up
+    fedfunds_label.set_text(f"{fedfunds_val:.2f}%" if fedfunds_val is not None else "—")
+    if fedfunds_val is not None and _prev_fedfunds is not None:
+        d = fedfunds_val - _prev_fedfunds
+        sign = "+" if d >= 0 else ""
+        fedfunds_change_label.set_text(f"({sign}{d:.2f})")
+        fedfunds_change_label.classes(
+            remove="text-green-400 text-red-400",
+            add="text-red-400" if d >= 0 else "text-green-400",
+        )
+    else:
+        fedfunds_change_label.set_text("")
+    if fedfunds_val is not None:
+        _prev_fedfunds = fedfunds_val
+
     # Persist for next session
-    if vix_val is not None or sp500_val is not None or gld_val is not None:
+    if vix_val is not None or sp500_val is not None or gld_val is not None or fedfunds_val is not None:
         await asyncio.to_thread(
             historicals_store.save_market_indicators,
-            vix_val, sp500_val, gld_val
+            vix_val, sp500_val, gld_val, fedfunds_val
         )
 
     # Debt to the Penny
@@ -542,6 +575,9 @@ with ui.tab_panels(tabs, value=dashboard_tab).classes("w-full"):
                 ui.label("GLD:").classes("font-semibold ml-4")
                 gld_label = ui.label("…").classes("text-lg")
                 gld_change_label = ui.label("").classes("text-sm")
+                ui.label("Fed Funds Rate:").classes("font-semibold ml-4")
+                fedfunds_label = ui.label("…").classes("text-lg")
+                fedfunds_change_label = ui.label("").classes("text-sm")
             with ui.row().classes("items-center gap-6 mt-1"):
                 with ui.column().classes("gap-0"):
                     ui.label("Portfolio (live)").classes("text-xs text-gray-400")

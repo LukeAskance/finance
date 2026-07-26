@@ -152,6 +152,7 @@ class MarketIndicatorSnapshot(Base):
     vix: Mapped[float | None] = mapped_column(Float, nullable=True)
     sp500: Mapped[float | None] = mapped_column(Float, nullable=True)
     gld: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fedfunds: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
 class Alert(Base):
@@ -189,6 +190,9 @@ def init_db(db_path: str) -> None:
         cols = {row[1] for row in conn.execute(text("PRAGMA table_info(market_indicator_snapshots)"))}
         if "gld" not in cols:
             conn.execute(text("ALTER TABLE market_indicator_snapshots ADD COLUMN gld REAL"))
+            conn.commit()
+        if "fedfunds" not in cols:
+            conn.execute(text("ALTER TABLE market_indicator_snapshots ADD COLUMN fedfunds REAL"))
             conn.commit()
 
         pos_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(daily_position_snapshots)"))}
@@ -399,8 +403,10 @@ def get_latest_portfolio_total() -> tuple[str, float] | None:
     return d.isoformat(), round(float(total or 0.0), 2)
 
 
-def save_market_indicators(vix: float | None, sp500: float | None, gld: float | None = None) -> None:
-    """Persist VIX, S&P 500, and GLD values with a UTC timestamp."""
+def save_market_indicators(
+    vix: float | None, sp500: float | None, gld: float | None = None, fedfunds: float | None = None
+) -> None:
+    """Persist VIX, S&P 500, GLD, and Fed Funds Rate values with a UTC timestamp."""
     with session_scope() as session:
         session.add(
             MarketIndicatorSnapshot(
@@ -408,19 +414,25 @@ def save_market_indicators(vix: float | None, sp500: float | None, gld: float | 
                 vix=vix,
                 sp500=sp500,
                 gld=gld,
+                fedfunds=fedfunds,
             )
         )
 
 
-def get_last_market_indicators() -> tuple[float | None, float | None, float | None]:
-    """Return (vix, sp500, gld) from the most recent saved row, or (None, None, None)."""
+def get_last_market_indicators() -> tuple[float | None, float | None, float | None, float | None]:
+    """Return (vix, sp500, gld, fedfunds) from the most recent saved row, or all-None."""
     with session_scope() as session:
         row = session.execute(
-            select(MarketIndicatorSnapshot.vix, MarketIndicatorSnapshot.sp500, MarketIndicatorSnapshot.gld)
+            select(
+                MarketIndicatorSnapshot.vix,
+                MarketIndicatorSnapshot.sp500,
+                MarketIndicatorSnapshot.gld,
+                MarketIndicatorSnapshot.fedfunds,
+            )
             .order_by(MarketIndicatorSnapshot.timestamp.desc())
             .limit(1)
         ).one_or_none()
-    return (None, None, None) if row is None else (row.vix, row.sp500, row.gld)
+    return (None, None, None, None) if row is None else (row.vix, row.sp500, row.gld, row.fedfunds)
 
 
 def get_cached_company_names(symbols: list[str]) -> dict[str, str]:
