@@ -32,6 +32,7 @@ class CompanyFinancials:
     cash_per_share: Optional[float]
     cash_per_share_error: Optional[str] = None
     otm_put_iv_pct: Optional[float] = None
+    otm_put_iv_180d_pct: Optional[float] = None
     otm_put_iv_error: Optional[str] = None
 
 
@@ -75,18 +76,8 @@ def get_cash_per_share(ticker: str) -> float:
     return cash / shares
 
 
-def get_otm_put_iv(api, ticker: str, target_moneyness: float = 0.90) -> float:
-    """OTM put implied volatility (%): nearest expiration >= 20 days out, put
-    strike closest to target_moneyness * spot, straight from Schwab's own
-    option chain (paid market data, so — unlike yfinance — it's available for
-    thinly-traded names too; volatility is already a plain percentage, no
-    unit conversion needed). Merton model treats equity as a call on the
-    firm's assets (debt = strike); a spike in this IV is a real-time proxy
-    for the market pricing in distress / a bond downgrade.
-
-    # ponytail: fixed 10%-OTM / nearest-20+-DTE definition, not configurable —
-    # add a moneyness/tenor knob if a specific alert ever needs a different one.
-    """
+def _fetch_put_chain(api, ticker: str) -> tuple[float, dict]:
+    """One Schwab PUT chain fetch; returns (spot_price, putExpDateMap)."""
     chain = api.get_option_chain(
         ticker,
         contractType="PUT",
@@ -103,19 +94,86 @@ def get_otm_put_iv(api, ticker: str, target_moneyness: float = 0.90) -> float:
     if not put_map:
         raise ValueError(f"No put chain available for {ticker}")
 
-    def dte(exp_key: str) -> int:
-        return int(exp_key.rsplit(":", 1)[-1])
+    return price, put_map
 
-    candidates = sorted((k for k in put_map if dte(k) >= 20), key=dte)
-    expiration = candidates[0] if candidates else min(put_map, key=dte)
 
+def _dte(exp_key: str) -> int:
+    return int(exp_key.rsplit(":", 1)[-1])
+
+
+def _iv_at_expiration(
+    put_map: dict, expiration: str, price: float, target_moneyness: float, ticker: str
+) -> Optional[float]:
+    """Closest-to-target-moneyness strike among ones with real open interest.
+    Schwab's "volatility" field still returns *some* number for a dead
+    contract (zero bid, zero volume, zero open interest) — it's noise, not
+    a market-implied read, since there's no real market to imply anything
+    from. None means every strike in this expiration is illiquid.
+    """
     strikes = put_map[expiration]
+    liquid_strikes = [
+        k for k in strikes if (strikes[k][0].get("openInterest") or 0) > 0
+    ]
+    if not liquid_strikes:
+        return None
+
     target_strike = price * target_moneyness
-    closest_strike = min(strikes, key=lambda k: abs(float(k) - target_strike))
+    closest_strike = min(liquid_strikes, key=lambda k: abs(float(k) - target_strike))
     iv = strikes[closest_strike][0].get("volatility")
-    if not iv:
-        raise ValueError(f"Implied volatility not available for {ticker} {expiration}")
-    return round(float(iv), 2)
+    return round(float(iv), 2) if iv else None
+
+
+def get_otm_put_iv(api, ticker: str, target_moneyness: float = 0.90) -> float:
+    """OTM put implied volatility (%): nearest expiration >= 20 days out, put
+    strike closest to target_moneyness * spot, straight from Schwab's own
+    option chain (paid market data, so — unlike yfinance — it's available for
+    thinly-traded names too; volatility is already a plain percentage, no
+    unit conversion needed). Merton model treats equity as a call on the
+    firm's assets (debt = strike); a spike in this IV is a real-time proxy
+    for the market pricing in distress / a bond downgrade.
+
+    # ponytail: fixed 10%-OTM / nearest-20+-DTE definition, not configurable —
+    # add a moneyness/tenor knob if a specific alert ever needs a different one.
+    """
+    return get_iv_term_structure(api, ticker, target_moneyness=target_moneyness)[0]
+
+
+def get_iv_term_structure(
+    api,
+    ticker: str,
+    near_days: int = 20,
+    far_days: int = 180,
+    target_moneyness: float = 0.90,
+) -> tuple[float, Optional[float]]:
+    """Same-day OTM put IV at two points on the term structure: nearest
+    expiration >= near_days out (the near leg — always required, same
+    definition as get_otm_put_iv), and the expiration closest to far_days
+    out (the far leg — None if nothing reasonably long-dated is listed, e.g.
+    no LEAPS, rather than comparing against a misleadingly-close "far" leg).
+    One chain fetch backs both legs, so they're from the same snapshot.
+
+    Term-structure backwardation (near > far) is a classic acute-distress /
+    event-risk signal distinct from a trailing-history spike: the market is
+    pricing near-term danger above the long-run picture, right now — visible
+    even for a ticker with no accumulated iv_history yet.
+
+    # ponytail: fixed 20D-near / 180D-far points, not configurable — add a
+    # knob if a specific alert ever needs different term-structure points.
+    """
+    price, put_map = _fetch_put_chain(api, ticker)
+
+    near_candidates = sorted((k for k in put_map if _dte(k) >= near_days), key=_dte)
+    near_expiration = near_candidates[0] if near_candidates else min(put_map, key=_dte)
+    near_iv = _iv_at_expiration(put_map, near_expiration, price, target_moneyness, ticker)
+    if near_iv is None:
+        raise ValueError(f"No liquid put strikes for {ticker} {near_expiration}")
+
+    far_expiration = min(put_map, key=lambda k: abs(_dte(k) - far_days))
+    if _dte(far_expiration) < far_days / 2:
+        return near_iv, None  # nothing long-dated enough to call a "far" leg
+
+    far_iv = _iv_at_expiration(put_map, far_expiration, price, target_moneyness, ticker)
+    return near_iv, far_iv  # far_iv may legitimately be None if illiquid
 
 
 def get_financials(ticker: str) -> CompanyFinancials:
@@ -140,9 +198,10 @@ def get_financials(ticker: str) -> CompanyFinancials:
         cash_ps_error = str(exc)
 
     otm_put_iv_pct: Optional[float] = None
+    otm_put_iv_180d_pct: Optional[float] = None
     otm_put_iv_error: Optional[str] = None
     try:
-        otm_put_iv_pct = get_otm_put_iv(get_shared_api(), ticker)
+        otm_put_iv_pct, otm_put_iv_180d_pct = get_iv_term_structure(get_shared_api(), ticker)
     except Exception as exc:
         otm_put_iv_error = str(exc)
 
@@ -161,6 +220,7 @@ def get_financials(ticker: str) -> CompanyFinancials:
         cash_per_share=round(cash_ps, 2) if cash_ps is not None else None,
         cash_per_share_error=cash_ps_error,
         otm_put_iv_pct=otm_put_iv_pct,
+        otm_put_iv_180d_pct=otm_put_iv_180d_pct,
         otm_put_iv_error=otm_put_iv_error,
     )
 
@@ -232,9 +292,9 @@ def get_insider_transactions(
 
 
 if __name__ == "__main__":
-    # ponytail: pure-logic self-check for get_otm_put_iv's expiration/strike
-    # selection; get_financials/get_cash_per_share/get_insider_transactions
-    # need live network so they aren't covered here.
+    # ponytail: pure-logic self-check for get_otm_put_iv/get_iv_term_structure's
+    # expiration/strike selection; get_financials/get_cash_per_share/
+    # get_insider_transactions need live network so they aren't covered here.
     class _FakeSchwabAPI:
         def __init__(self, chain):
             self._chain = chain
@@ -242,18 +302,23 @@ if __name__ == "__main__":
         def get_option_chain(self, ticker, **kwargs):
             return self._chain
 
+    def _c(vol, oi=1):
+        """One fake contract: some open interest by default (a real market)."""
+        return [{"volatility": vol, "openInterest": oi}]
+
     today = datetime.date.today()
     near_key = f"{(today + datetime.timedelta(days=5)).isoformat()}:5"
     far_key = f"{(today + datetime.timedelta(days=30)).isoformat()}:30"
+    long_key = f"{(today + datetime.timedelta(days=180)).isoformat()}:180"
 
     chain = {
         "underlying": {"last": 100.0},
         "putExpDateMap": {
-            near_key: {"90.0": [{"volatility": 99.0}]},
+            near_key: {"90.0": _c(99.0)},
             far_key: {
-                "80.0": [{"volatility": 55.0}],
-                "90.0": [{"volatility": 40.0}],
-                "100.0": [{"volatility": 35.0}],
+                "80.0": _c(55.0),
+                "90.0": _c(40.0),
+                "100.0": _c(35.0),
             },
         },
     }
@@ -265,7 +330,7 @@ if __name__ == "__main__":
     # falls back to the only available expiration when none are 20+ days out
     chain_near_only = {
         "underlying": {"last": 100.0},
-        "putExpDateMap": {near_key: {"90.0": [{"volatility": 99.0}]}},
+        "putExpDateMap": {near_key: {"90.0": _c(99.0)}},
     }
     iv = get_otm_put_iv(_FakeSchwabAPI(chain_near_only), "TEST")
     assert iv == 99.0, iv
@@ -277,5 +342,57 @@ if __name__ == "__main__":
         raise AssertionError("expected ValueError for empty chain")
     except ValueError:
         pass
+
+    # zero open interest on every strike (the JPST bug: Schwab still returns
+    # a "volatility" number for a dead contract) -> raises, doesn't return noise
+    dead_chain = {
+        "underlying": {"last": 100.0},
+        "putExpDateMap": {near_key: {"90.0": _c(25.0, oi=0)}},
+    }
+    try:
+        get_otm_put_iv(_FakeSchwabAPI(dead_chain), "TEST")
+        raise AssertionError("expected ValueError for zero-open-interest chain")
+    except ValueError:
+        pass
+
+    # no expiration far enough out to call a real "far" leg -> None, not a
+    # misleading comparison against the 30d contract
+    near_iv, far_iv = get_iv_term_structure(_FakeSchwabAPI(chain), "TEST")
+    assert near_iv == 40.0, near_iv
+    assert far_iv is None, far_iv
+
+    # a real long-dated leg exists -> both legs returned, inversion detectable
+    chain_with_long = {
+        "underlying": {"last": 100.0},
+        "putExpDateMap": {
+            **chain["putExpDateMap"],
+            long_key: {
+                "80.0": _c(20.0),
+                "90.0": _c(25.0),
+                "100.0": _c(30.0),
+            },
+        },
+    }
+    near_iv, far_iv = get_iv_term_structure(_FakeSchwabAPI(chain_with_long), "TEST")
+    assert near_iv == 40.0, near_iv
+    assert far_iv == 25.0, far_iv
+    assert near_iv > far_iv  # backwardation: near-term distress signal
+
+    # far leg exists but every strike in it is illiquid (zero open interest,
+    # the exact JPST shape) -> far is None, not a fabricated "inversion"
+    chain_illiquid_far = {
+        "underlying": {"last": 100.0},
+        "putExpDateMap": {
+            **chain["putExpDateMap"],
+            long_key: {
+                "80.0": _c(20.0, oi=0),
+                "90.0": _c(9.9, oi=0),
+                "100.0": _c(30.0, oi=0),
+            },
+        },
+    }
+    near_iv, far_iv = get_iv_term_structure(_FakeSchwabAPI(chain_illiquid_far), "TEST")
+    assert near_iv == 40.0, near_iv
+    assert far_iv is None, far_iv
 
     print("financials.py self-check OK")

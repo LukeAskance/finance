@@ -19,7 +19,7 @@ import historicals_store
 import options
 import utilities
 from analysis_module import PortfolioAnalysisEngine
-from positions import load_portfolio_positions
+from positions import discover_equity_names, load_portfolio_positions
 from schwab_api import SchwabAPI, get_shared_api
 
 import tabs.alerts_tab as alerts_tab_mod
@@ -230,6 +230,11 @@ async def ensure_portfolio_snapshot(
     return portfolio_snapshot_positions, portfolio_snapshot_rows
 
 
+async def get_portfolio_equity_tickers() -> list[str]:
+    positions, _ = await ensure_portfolio_snapshot()
+    return discover_equity_names(list(positions))
+
+
 def aggregate_rows_by_symbol(
     rows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -415,10 +420,11 @@ async def fetch_market_indicators() -> None:
 
 
 async def check_alerts_click():
-    check_now = _alerts_refs.get("check_now")
-    if check_now is None:
-        return
-    triggered = await check_now()
+    triggered = False
+    if (check_now := _alerts_refs.get("check_now")) is not None:
+        triggered = await check_now() or triggered
+    if (check_portfolio := _alerts_refs.get("check_portfolio_iv_spikes")) is not None:
+        triggered = await check_portfolio() or triggered
     if triggered:
         tabs.value = alerts_tab
 
@@ -621,6 +627,6 @@ with ui.tab_panels(tabs, value=dashboard_tab).classes("w-full"):
 
     mcp_tab_mod.build(mcp_tab)
 
-    _alerts_refs.update(alerts_tab_mod.build(alerts_tab))
+    _alerts_refs.update(alerts_tab_mod.build(alerts_tab, get_portfolio_equity_tickers))
 
 ui.run(port=8000, reload=False)

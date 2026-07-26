@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import statistics
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
@@ -624,3 +625,14 @@ def get_iv_history(ticker: str, days: int = 90) -> list[dict[str, Any]]:
             {"timestamp": r.timestamp, "otm_put_iv_pct": r.otm_put_iv_pct}
             for r in rows
         ]
+
+
+def get_iv_baseline(ticker: str, days: int = 30, min_points: int = 10) -> float | None:
+    """Median otm_put_iv_pct over the trailing window — the "base value" a
+    spike is measured against. None if too few readings exist yet (a fresh
+    ticker shouldn't false-trigger on day one for lack of a real baseline).
+    """
+    history = get_iv_history(ticker, days=days)
+    if len(history) < min_points:
+        return None
+    return statistics.median(h["otm_put_iv_pct"] for h in history)

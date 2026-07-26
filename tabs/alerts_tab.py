@@ -24,7 +24,7 @@ def _fmt_dt(value) -> str:
     return value.strftime("%Y-%m-%d %H:%M")
 
 
-def build(panel_ref) -> dict:
+def build(panel_ref, get_portfolio_tickers) -> dict:
     with ui.tab_panel(panel_ref):
         with ui.card().classes("w-full"):
             ui.label("Alerts").classes("text-xl font-semibold")
@@ -53,6 +53,22 @@ def build(panel_ref) -> dict:
                     "Check now", on_click=lambda: check_all_click()
                 )
             list_column = ui.column().classes("w-full gap-2 mt-2")
+
+        with ui.card().classes("w-full"):
+            with ui.row().classes("w-full items-center justify-between"):
+                with ui.column().classes("gap-1"):
+                    ui.label("Portfolio-wide: IV Spikes").classes("text-lg font-semibold")
+                    ui.label(
+                        "Scans every current holding for OTM put IV spiking above its "
+                        "own trailing 30-day baseline — a Merton-model distress proxy, "
+                        "no note needed."
+                    ).classes("text-sm text-gray-400")
+                check_portfolio_button = ui.button(
+                    "Check Portfolio for IV Spikes",
+                    on_click=lambda: check_portfolio_click(),
+                )
+            portfolio_status_label = ui.label("").classes("text-sm text-gray-400")
+            portfolio_results_column = ui.column().classes("w-full gap-1 mt-2")
 
         def refresh_list() -> None:
             list_column.clear()
@@ -135,10 +151,42 @@ def build(panel_ref) -> dict:
                 check_all_button.text = "Check now"
                 check_all_button.enable()
 
+        async def check_portfolio_click() -> bool:
+            check_portfolio_button.disable()
+            check_portfolio_button.text = "Checking…"
+            portfolio_results_column.clear()
+            try:
+                tickers = await get_portfolio_tickers()
+                portfolio_status_label.text = f"Scanning {len(tickers)} holdings…"
+                spikes = await asyncio.to_thread(alerts.check_portfolio_iv_spikes, tickers)
+                with portfolio_results_column:
+                    if spikes:
+                        for s in spikes:
+                            with ui.column().classes("gap-0"):
+                                ui.label(f"🔔 {s['ticker']}").classes(
+                                    "text-sm text-positive font-semibold"
+                                )
+                                for reason in s["reasons"]:
+                                    ui.label(f"  {reason}").classes(
+                                        "text-xs text-gray-400"
+                                    )
+                    else:
+                        ui.label("No spikes detected.").classes("text-sm text-gray-500")
+                portfolio_status_label.text = f"Checked {len(tickers)} holdings."
+                if spikes:
+                    ui.notify(f"{len(spikes)} name(s) spiking", color="positive")
+                return bool(spikes)
+            finally:
+                check_portfolio_button.text = "Check Portfolio for IV Spikes"
+                check_portfolio_button.enable()
+
         def delete_click(alert_id: int) -> None:
             historicals_store.delete_alert(alert_id)
             refresh_list()
 
         refresh_list()
 
-    return {"check_now": check_all_click}
+    return {
+        "check_now": check_all_click,
+        "check_portfolio_iv_spikes": check_portfolio_click,
+    }

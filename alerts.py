@@ -8,6 +8,7 @@ LLM — it calls financials.get_financials() directly and compares numbers.
 from __future__ import annotations
 
 import operator
+from concurrent.futures import ThreadPoolExecutor
 
 import claude_client
 import historicals_store
@@ -132,6 +133,61 @@ def check_alert(alert: dict) -> tuple[bool, str]:
     return triggered, f"{ticker} {metric} = {value} (threshold: {op} {threshold})"
 
 
+def check_portfolio_iv_spikes(
+    tickers: list[str],
+    relative_multiple: float = 1.5,
+    absolute_pp: float = 10.0,
+) -> list[dict]:
+    """Scan every ticker for options-market distress signals — no LLM, no
+    per-ticker alert needed, this watches the whole portfolio at once. Two
+    independent triggers, either one flags a ticker:
+
+    - baseline spike: today's near-term OTM put IV exceeds BOTH 1.5x AND
+      +10 percentage points over its own trailing 30-day median. Catches a
+      gradual multi-week drift higher. Requires ~10 days of accumulated
+      history, so a freshly-watched ticker won't trigger this on day one.
+    - term-structure inversion: near-term (~20d+) IV > long-dated (~180d)
+      IV. Catches an acute, same-day event-risk signal even for a ticker
+      with no accumulated history yet — the market pricing near-term danger
+      above the long-run picture, right now.
+    """
+
+    def _check_one(ticker: str) -> dict | None:
+        financials = get_financials(ticker)
+        reasons = []
+
+        today = financials.otm_put_iv_pct
+        baseline = historicals_store.get_iv_baseline(ticker)
+        if today is not None and baseline is not None:
+            if today > baseline * relative_multiple and (today - baseline) > absolute_pp:
+                pct_over = round((today / baseline - 1) * 100, 1)
+                reasons.append(
+                    f"baseline spike: {today:.1f}% vs 30d median "
+                    f"{baseline:.1f}% (+{pct_over}%)"
+                )
+
+        near, far = financials.otm_put_iv_pct, financials.otm_put_iv_180d_pct
+        if near is not None and far is not None and near > far:
+            reasons.append(
+                f"term-structure inversion: near {near:.1f}% > 180d {far:.1f}%"
+            )
+
+        if not reasons:
+            return None
+        return {
+            "ticker": ticker,
+            "today": today,
+            "baseline": round(baseline, 2) if baseline is not None else None,
+            "reasons": reasons,
+        }
+
+    if not tickers:
+        return []
+    with ThreadPoolExecutor(max_workers=min(8, len(tickers))) as pool:
+        results = list(pool.map(_check_one, tickers))
+    return [r for r in results if r is not None]
+
+
 if __name__ == "__main__":
     # ponytail: pure-logic self-check for check_alert; create_alert needs a
     # live ANTHROPIC_API_KEY + network so it isn't covered here.
@@ -158,5 +214,41 @@ if __name__ == "__main__":
 
     triggered, msg = check_alert({"ticker": None, "metric": None, "op": None, "threshold": None})
     assert triggered is False
+
+    # check_portfolio_iv_spikes: fake the baseline lookup and per-ticker
+    # fetch to exercise both independent triggers.
+    @dataclass
+    class _FakeIvFinancials:
+        otm_put_iv_pct: float | None
+        otm_put_iv_180d_pct: float | None = None
+
+    _baselines = {
+        "SPIKE": 20.0, "FLAT": 20.0, "NOHIST": None, "LOWIV": 4.0,
+        "NEWEVENT": None, "BOTH": 20.0,
+    }
+    _financials = {
+        "SPIKE": _FakeIvFinancials(45.0, None),       # baseline spike only
+        "FLAT": _FakeIvFinancials(22.0, None),        # neither trigger
+        "LOWIV": _FakeIvFinancials(7.0, None),        # relative trips, absolute doesn't
+        "NEWEVENT": _FakeIvFinancials(40.0, 15.0),    # no history yet, but inverted
+        "BOTH": _FakeIvFinancials(45.0, 15.0),        # both triggers fire
+    }
+
+    historicals_store.get_iv_baseline = lambda ticker, **kw: _baselines.get(ticker)
+    get_financials = lambda ticker: _financials.get(ticker, _FakeIvFinancials(None, None))
+
+    spikes = check_portfolio_iv_spikes(["SPIKE", "FLAT", "NOHIST", "LOWIV", "NEWEVENT", "BOTH"])
+    flagged = {s["ticker"]: s["reasons"] for s in spikes}
+    # SPIKE: 45 vs 20 baseline -> 2.25x AND +25pp -> flagged (baseline spike)
+    # FLAT: 22 vs 20 -> below both guards -> not flagged
+    # NOHIST: no financials/baseline at all -> skipped
+    # LOWIV: 7 vs 4 -> 1.75x (relative trips) but only +3pp (absolute doesn't) -> not flagged
+    # NEWEVENT: no baseline (can't spike-check) but near 40 > far 15 -> flagged (inversion),
+    #           proving the acute signal works even with zero accumulated history
+    # BOTH: baseline spike AND inversion -> flagged with two reasons
+    assert set(flagged) == {"SPIKE", "NEWEVENT", "BOTH"}, flagged
+    assert len(flagged["SPIKE"]) == 1 and "baseline spike" in flagged["SPIKE"][0]
+    assert len(flagged["NEWEVENT"]) == 1 and "inversion" in flagged["NEWEVENT"][0]
+    assert len(flagged["BOTH"]) == 2
 
     print("alerts.py self-check OK")
