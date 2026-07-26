@@ -5,6 +5,7 @@
 
 import json
 import logging
+import os
 import time
 from datetime import datetime
 from typing import Optional, Tuple
@@ -179,3 +180,35 @@ class SchwabAPI:
     def stream(self):
         """Access the streaming client."""
         return self.client.stream
+
+
+_shared_api: Optional["SchwabAPI"] = None
+_shared_api_error: Optional[str] = None
+
+
+def get_shared_api() -> "SchwabAPI":
+    """Lazily build the one shared SchwabAPI instance from .env credentials,
+    so every caller (money.py's UI, financials.py's alert metrics, ...)
+    reuses a single schwabdev.Client / token-refresh thread instead of each
+    spinning up its own.
+    """
+    global _shared_api, _shared_api_error
+    if _shared_api is not None:
+        return _shared_api
+    if _shared_api_error is not None:
+        raise RuntimeError(_shared_api_error)
+
+    try:
+        from schwabdev.client import Client as _SchwabClient
+    except ImportError as exc:
+        _shared_api_error = f"schwabdev import failed: {exc}"
+        raise RuntimeError(_shared_api_error) from exc
+
+    client = _SchwabClient(
+        os.getenv("SCHWAB_APP_KEY"),
+        os.getenv("SCHWAB_SECRET"),
+        os.getenv("callback_url"),
+        os.getenv("token_filename"),
+    )
+    _shared_api = SchwabAPI(client)
+    return _shared_api

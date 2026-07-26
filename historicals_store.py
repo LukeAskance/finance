@@ -177,6 +177,20 @@ class Alert(Base):
     triggered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class IvHistory(Base):
+    """Time series of OTM put IV% readings per ticker, recorded whenever
+    financials.get_otm_put_iv() computes one — the Merton-model distress
+    proxy is only useful as a trend (is it spiking?), so each reading needs
+    to be kept, not just the latest value."""
+
+    __tablename__ = "iv_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ticker: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    otm_put_iv_pct: Mapped[float] = mapped_column(Float, nullable=False)
+
+
 _engine = None
 _SessionLocal: sessionmaker[Session] | None = None
 
@@ -585,3 +599,28 @@ def record_alert_check(alert_id: int, last_result: str, triggered: bool) -> None
 def delete_alert(alert_id: int) -> None:
     with session_scope() as session:
         session.execute(delete(Alert).where(Alert.id == alert_id))
+
+
+def record_iv(ticker: str, otm_put_iv_pct: float) -> None:
+    with session_scope() as session:
+        session.add(
+            IvHistory(
+                ticker=ticker.upper(),
+                timestamp=datetime.now(timezone.utc),
+                otm_put_iv_pct=otm_put_iv_pct,
+            )
+        )
+
+
+def get_iv_history(ticker: str, days: int = 90) -> list[dict[str, Any]]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    with session_scope() as session:
+        rows = session.execute(
+            select(IvHistory.timestamp, IvHistory.otm_put_iv_pct)
+            .where(IvHistory.ticker == ticker.upper(), IvHistory.timestamp >= cutoff)
+            .order_by(IvHistory.timestamp)
+        ).all()
+        return [
+            {"timestamp": r.timestamp, "otm_put_iv_pct": r.otm_put_iv_pct}
+            for r in rows
+        ]

@@ -20,7 +20,7 @@ import options
 import utilities
 from analysis_module import PortfolioAnalysisEngine
 from positions import load_portfolio_positions
-from schwab_api import SchwabAPI
+from schwab_api import SchwabAPI, get_shared_api
 
 import tabs.alerts_tab as alerts_tab_mod
 import tabs.analysis_tab as analysis_tab_mod
@@ -39,16 +39,6 @@ try:
 except ImportError as exc:
     DividendForecaster = None  # type: ignore[assignment]
     _dividend_prediction_import_error = exc
-
-try:
-    from schwabdev.client import Client as _SchwabClient
-
-    _schwab_import_error = None
-except ImportError as exc:
-    _SchwabClient = None
-    _schwab_import_error = exc
-
-SchwabClient: Any = _SchwabClient
 
 load_dotenv()
 historicals_store.init_db("/Users/george/code/money/portfolio.db")
@@ -76,18 +66,6 @@ ui.add_head_html(
 )
 
 
-def getClient():
-    if SchwabClient is None:
-        raise RuntimeError(f"schwabdev import failed: {_schwab_import_error}")
-
-    return SchwabClient(
-        os.getenv("SCHWAB_APP_KEY"),
-        os.getenv("SCHWAB_SECRET"),
-        os.getenv("callback_url"),
-        os.getenv("token_filename"),
-    )
-
-
 def generate_report():
     time.sleep(2)
     return "Report generated successfully"
@@ -107,7 +85,6 @@ def run_task(script: str):
 # Shared state
 # ---------------------------------------------------------------------------
 
-api: SchwabAPI | None = None
 portfolio_snapshot_positions: list[Any] = []
 portfolio_snapshot_rows: list[dict[str, Any]] = []
 portfolio_snapshot_as_of: datetime | None = None
@@ -126,10 +103,7 @@ INCOME_ACCOUNT_NAMES = [
 
 
 def get_api() -> SchwabAPI:
-    global api
-    if api is None:
-        api = SchwabAPI(getClient())
-    return api
+    return get_shared_api()
 
 
 def fetch_quote(symbol: str) -> dict[str, Any] | None:

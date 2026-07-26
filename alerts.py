@@ -22,7 +22,12 @@ _OPS = {
     "==": operator.eq,
 }
 
-_AVAILABLE_METRICS = "price, eps, dividend_yield_pct, pe_ratio, cash_per_share"
+_AVAILABLE_METRICS = (
+    "price, eps, dividend_yield_pct, pe_ratio, cash_per_share, "
+    "otm_put_iv_pct (options-implied volatility on ~10%-OTM puts, nearest "
+    "20+ day expiration — a Merton-model proxy for market-implied credit "
+    "distress; a spike suggests the market is pricing in higher default risk)"
+)
 
 RECORD_ALERT_TOOL = {
     "name": "record_alert",
