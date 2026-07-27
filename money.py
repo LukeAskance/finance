@@ -156,8 +156,15 @@ def _build_portfolio_rows_from_positions(
             "quantity": round(float(p.quantity), 4),
             "last": round(float(p.last_price), 4),
             "market_value": round(float(p.market_value), 2),
-            "pl": round(float(p.pl_total), 2),
-            "pct_pl": _pct_pl(float(p.pl_total), float(p.market_value)),
+            # ponytail: average_cost <= 0 means the broker gave us no cost basis
+            # (e.g. Fidelity's positions export omits it) rather than a true $0
+            # cost — flag instead of showing a fabricated 100% gain.
+            "pl": round(float(p.pl_total), 2) if p.average_cost > 0 else "N/A",
+            "pct_pl": (
+                _pct_pl(float(p.pl_total), float(p.market_value))
+                if p.average_cost > 0
+                else "N/A"
+            ),
             "pe_ratio": _pe_ratio_for_row(p),
             "div_yield": round(float(p.div_yield), 2) if p.div_yield else None,
         }
@@ -224,7 +231,11 @@ async def ensure_portfolio_snapshot(
         writer = csv.writer(f)
         writer.writerow(["symbol", "company_name", "account", "share_quantity", "latest_price", "market_value", "cost_basis"])
         for row in rows:
-            cost_basis = round(float(row.get("market_value", 0.0)) - float(row.get("pl", 0.0)), 2)
+            pl = row.get("pl", 0.0)
+            cost_basis = (
+                round(float(row.get("market_value", 0.0)) - float(pl), 2)
+                if pl != "N/A" else "N/A"
+            )
             writer.writerow([row["symbol"], company_names.get(row["symbol"], ""), row.get("account", ""), row["quantity"], row["last"], row["market_value"], cost_basis])
 
     return portfolio_snapshot_positions, portfolio_snapshot_rows
@@ -256,25 +267,37 @@ def aggregate_rows_by_symbol(
                 "last": 0.0,
                 "market_value": 0.0,
                 "pl": 0.0,
+                "pl_unknown": False,
                 "pe_ratio": row.get("pe_ratio", "--"),
                 "div_yield": row.get("div_yield"),
             }
 
         grouped[symbol]["quantity"] += float(row.get("quantity", 0.0))
         grouped[symbol]["market_value"] += float(row.get("market_value", 0.0))
-        grouped[symbol]["pl"] += float(row.get("pl", 0.0))
+        row_pl = row.get("pl", 0.0)
+        if row_pl == "N/A":
+            # ponytail: one lot's cost basis is unknown, so the combined P/L
+            # can't be trusted either — flag the whole aggregated symbol.
+            grouped[symbol]["pl_unknown"] = True
+        else:
+            grouped[symbol]["pl"] += float(row_pl)
         grouped[symbol]["last"] = float(row.get("last", 0.0))
 
     aggregated = list(grouped.values())
     for row in aggregated:
+        unknown = row.pop("pl_unknown")
         row["quantity"] = round(float(row["quantity"]), 4)
         row["market_value"] = round(float(row["market_value"]), 2)
-        row["pl"] = round(float(row["pl"]), 2)
         row["last"] = round(float(row["last"]), 4)
-        pl = float(row["pl"])
-        mv = float(row["market_value"])
-        cost_basis = mv - pl
-        row["pct_pl"] = round((pl / cost_basis) * 100, 2) if cost_basis != 0 else 0.0
+        if unknown:
+            row["pl"] = "N/A"
+            row["pct_pl"] = "N/A"
+        else:
+            row["pl"] = round(float(row["pl"]), 2)
+            pl = float(row["pl"])
+            mv = float(row["market_value"])
+            cost_basis = mv - pl
+            row["pct_pl"] = round((pl / cost_basis) * 100, 2) if cost_basis != 0 else 0.0
 
     aggregated.sort(
         key=lambda row: float(row.get("market_value", 0.0)),
