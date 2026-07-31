@@ -200,6 +200,23 @@ def _fetch_company_names(symbols: list[str]) -> dict[str, str]:
     return {**cached, **fetched}
 
 
+def _write_portfolio_csv(
+    csv_path: str,
+    rows: list[dict[str, Any]],
+    company_names: dict[str, str],
+) -> None:
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["symbol", "company_name", "account", "share_quantity", "latest_price", "market_value", "cost_basis"])
+        for row in rows:
+            pl = row.get("pl", 0.0)
+            cost_basis = (
+                round(float(row.get("market_value", 0.0)) - float(pl), 2)
+                if pl != "N/A" else "N/A"
+            )
+            writer.writerow([row["symbol"], company_names.get(row["symbol"], ""), row.get("account", ""), row["quantity"], row["last"], row["market_value"], cost_basis])
+
+
 async def ensure_portfolio_snapshot(
     force_refresh: bool = False,
 ) -> tuple[list[Any], list[dict[str, Any]]]:
@@ -227,16 +244,7 @@ async def ensure_portfolio_snapshot(
     csv_path = os.path.join(csv_dir, f"Portfolio-{datecode}.csv")
     symbols = [r["symbol"] for r in rows]
     company_names = await asyncio.to_thread(_fetch_company_names, symbols)
-    with open(csv_path, "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["symbol", "company_name", "account", "share_quantity", "latest_price", "market_value", "cost_basis"])
-        for row in rows:
-            pl = row.get("pl", 0.0)
-            cost_basis = (
-                round(float(row.get("market_value", 0.0)) - float(pl), 2)
-                if pl != "N/A" else "N/A"
-            )
-            writer.writerow([row["symbol"], company_names.get(row["symbol"], ""), row.get("account", ""), row["quantity"], row["last"], row["market_value"], cost_basis])
+    await asyncio.to_thread(_write_portfolio_csv, csv_path, rows, company_names)
 
     return portfolio_snapshot_positions, portfolio_snapshot_rows
 
@@ -452,6 +460,12 @@ async def check_alerts_click():
         tabs.value = alerts_tab
 
 
+async def check_portfolio_iv_spikes_click():
+    if (check_portfolio := _alerts_refs.get("check_portfolio_iv_spikes")) is not None:
+        await check_portfolio()
+    tabs.value = alerts_tab
+
+
 async def exit_app_click():
     ui.notify("Closing browser tab and exiting...", color="warning")
     with suppress(Exception):
@@ -606,6 +620,10 @@ with ui.tab_panels(tabs, value=dashboard_tab).classes("w-full"):
                     "No shared snapshot loaded"
                 ).classes("text-sm")
             ui.button("Check Alerts", on_click=check_alerts_click)
+            ui.button(
+                "Check Portfolio for IV Spikes",
+                on_click=check_portfolio_iv_spikes_click,
+            )
             ui.button("Exit Application", on_click=exit_app_click)
 
     _portfolio_refs.update(
