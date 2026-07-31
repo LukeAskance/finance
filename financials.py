@@ -33,7 +33,11 @@ class CompanyFinancials:
     cash_per_share_error: Optional[str] = None
     otm_put_iv_pct: Optional[float] = None
     otm_put_iv_180d_pct: Optional[float] = None
+    otm_put_iv_near_expiration: Optional[datetime.date] = None
     otm_put_iv_error: Optional[str] = None
+    market_cap: Optional[float] = None
+    sector: Optional[str] = None
+    next_earnings_date: Optional[datetime.date] = None
 
 
 @dataclass
@@ -144,7 +148,7 @@ def get_iv_term_structure(
     near_days: int = 20,
     far_days: int = 180,
     target_moneyness: float = 0.90,
-) -> tuple[float, Optional[float]]:
+) -> tuple[float, Optional[float], datetime.date]:
     """Same-day OTM put IV at two points on the term structure: nearest
     expiration >= near_days out (the near leg — always required, same
     definition as get_otm_put_iv), and the expiration closest to far_days
@@ -157,6 +161,11 @@ def get_iv_term_structure(
     pricing near-term danger above the long-run picture, right now — visible
     even for a ticker with no accumulated iv_history yet.
 
+    Also returns the near leg's actual expiration date, so callers can tell
+    whether an upcoming earnings date falls inside the near-term put's own
+    window (earnings routinely inflates near-term IV on its own, independent
+    of distress).
+
     # ponytail: fixed 20D-near / 180D-far points, not configurable — add a
     # knob if a specific alert ever needs different term-structure points.
     """
@@ -167,13 +176,33 @@ def get_iv_term_structure(
     near_iv = _iv_at_expiration(put_map, near_expiration, price, target_moneyness, ticker)
     if near_iv is None:
         raise ValueError(f"No liquid put strikes for {ticker} {near_expiration}")
+    near_expiration_date = datetime.date.fromisoformat(
+        near_expiration.rsplit(":", 1)[0]
+    )
 
     far_expiration = min(put_map, key=lambda k: abs(_dte(k) - far_days))
     if _dte(far_expiration) < far_days / 2:
-        return near_iv, None  # nothing long-dated enough to call a "far" leg
+        return near_iv, None, near_expiration_date  # nothing long-dated enough to call a "far" leg
 
     far_iv = _iv_at_expiration(put_map, far_expiration, price, target_moneyness, ticker)
-    return near_iv, far_iv  # far_iv may legitimately be None if illiquid
+    return near_iv, far_iv, near_expiration_date  # far_iv may legitimately be None if illiquid
+
+
+def _next_earnings_date(t, info: dict) -> Optional[datetime.date]:
+    """Best-effort next earnings date from yfinance — info's earningsTimestamp
+    when present, else the calendar endpoint. Either can be missing/flaky
+    depending on the ticker, so any failure just means "unknown", not fatal.
+    """
+    ts = info.get("earningsTimestamp") or info.get("earningsTimestampStart")
+    if ts:
+        with suppress(Exception):
+            return datetime.datetime.fromtimestamp(ts, tz=datetime.UTC).date()
+    with suppress(Exception):
+        cal = t.calendar
+        dates = cal.get("Earnings Date") if isinstance(cal, dict) else None
+        if dates:
+            return dates[0]
+    return None
 
 
 def get_financials(ticker: str) -> CompanyFinancials:
@@ -189,6 +218,9 @@ def get_financials(ticker: str) -> CompanyFinancials:
     raw_yield = info.get("dividendYield")
     dividend_yield_pct = round(raw_yield, 2) if raw_yield is not None else None
     pe_ratio = info.get("trailingPE")
+    market_cap = info.get("marketCap")
+    sector = info.get("sector")
+    next_earnings_date = _next_earnings_date(t, info)
 
     cash_ps: Optional[float] = None
     cash_ps_error: Optional[str] = None
@@ -199,9 +231,12 @@ def get_financials(ticker: str) -> CompanyFinancials:
 
     otm_put_iv_pct: Optional[float] = None
     otm_put_iv_180d_pct: Optional[float] = None
+    otm_put_iv_near_expiration: Optional[datetime.date] = None
     otm_put_iv_error: Optional[str] = None
     try:
-        otm_put_iv_pct, otm_put_iv_180d_pct = get_iv_term_structure(get_shared_api(), ticker)
+        otm_put_iv_pct, otm_put_iv_180d_pct, otm_put_iv_near_expiration = (
+            get_iv_term_structure(get_shared_api(), ticker)
+        )
     except Exception as exc:
         otm_put_iv_error = str(exc)
 
@@ -221,7 +256,11 @@ def get_financials(ticker: str) -> CompanyFinancials:
         cash_per_share_error=cash_ps_error,
         otm_put_iv_pct=otm_put_iv_pct,
         otm_put_iv_180d_pct=otm_put_iv_180d_pct,
+        otm_put_iv_near_expiration=otm_put_iv_near_expiration,
         otm_put_iv_error=otm_put_iv_error,
+        market_cap=market_cap,
+        sector=sector,
+        next_earnings_date=next_earnings_date,
     )
 
 
@@ -357,9 +396,10 @@ if __name__ == "__main__":
 
     # no expiration far enough out to call a real "far" leg -> None, not a
     # misleading comparison against the 30d contract
-    near_iv, far_iv = get_iv_term_structure(_FakeSchwabAPI(chain), "TEST")
+    near_iv, far_iv, near_exp = get_iv_term_structure(_FakeSchwabAPI(chain), "TEST")
     assert near_iv == 40.0, near_iv
     assert far_iv is None, far_iv
+    assert near_exp == today + datetime.timedelta(days=30), near_exp
 
     # a real long-dated leg exists -> both legs returned, inversion detectable
     chain_with_long = {
@@ -373,7 +413,7 @@ if __name__ == "__main__":
             },
         },
     }
-    near_iv, far_iv = get_iv_term_structure(_FakeSchwabAPI(chain_with_long), "TEST")
+    near_iv, far_iv, near_exp = get_iv_term_structure(_FakeSchwabAPI(chain_with_long), "TEST")
     assert near_iv == 40.0, near_iv
     assert far_iv == 25.0, far_iv
     assert near_iv > far_iv  # backwardation: near-term distress signal
@@ -391,7 +431,7 @@ if __name__ == "__main__":
             },
         },
     }
-    near_iv, far_iv = get_iv_term_structure(_FakeSchwabAPI(chain_illiquid_far), "TEST")
+    near_iv, far_iv, near_exp = get_iv_term_structure(_FakeSchwabAPI(chain_illiquid_far), "TEST")
     assert near_iv == 40.0, near_iv
     assert far_iv is None, far_iv
 

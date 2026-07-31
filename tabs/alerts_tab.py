@@ -157,25 +157,89 @@ def build(panel_ref, get_portfolio_tickers) -> dict:
             portfolio_results_column.clear()
             try:
                 tickers = await get_portfolio_tickers()
-                portfolio_status_label.text = f"Scanning {len(tickers)} holdings…"
-                spikes = await asyncio.to_thread(alerts.check_portfolio_iv_spikes, tickers)
+                if not tickers:
+                    portfolio_status_label.text = "No holdings to scan."
+                    return False
+
+                total = len(tickers)
+                scanned = 0
+                spikes: list[dict] = []
+                row_boxes: dict[str, ui.row] = {}
+                portfolio_status_label.text = f"Scanning {total} holdings…"
+
                 with portfolio_results_column:
-                    if spikes:
-                        for s in spikes:
+                    for ticker in tickers:
+                        box = ui.row().classes("items-center gap-2")
+                        with box:
+                            ui.spinner(size="sm")
+                            ui.label(f"{ticker} — checking…").classes(
+                                "text-sm text-gray-400"
+                            )
+                        row_boxes[ticker] = box
+
+                # ponytail: cap concurrency at 8 in-flight checks, same limit
+                # the old ThreadPoolExecutor used — stays event-loop-native
+                # (asyncio.to_thread) so updating each row as it resolves is
+                # safe, instead of updating UI from a background thread.
+                semaphore = asyncio.Semaphore(min(8, total))
+
+                async def _run(ticker: str) -> None:
+                    nonlocal scanned
+                    async with semaphore:
+                        result = await asyncio.to_thread(
+                            alerts.check_ticker_for_iv_spike, ticker
+                        )
+                    scanned += 1
+                    portfolio_status_label.text = f"Scanned {scanned}/{total} holdings…"
+                    box = row_boxes[ticker]
+                    box.clear()
+                    with box:
+                        if result:
+                            spikes.append(result)
+                            emoji, color = (
+                                ("📅", "text-warning")
+                                if result["kind"] == "earnings"
+                                else ("🔔", "text-positive")
+                            )
                             with ui.column().classes("gap-0"):
-                                ui.label(f"🔔 {s['ticker']}").classes(
-                                    "text-sm text-positive font-semibold"
+                                ui.label(f"{emoji} {ticker}").classes(
+                                    f"text-sm {color} font-semibold"
                                 )
-                                for reason in s["reasons"]:
+                                for reason in result["reasons"]:
                                     ui.label(f"  {reason}").classes(
                                         "text-xs text-gray-400"
                                     )
-                    else:
-                        ui.label("No spikes detected.").classes("text-sm text-gray-500")
-                portfolio_status_label.text = f"Checked {len(tickers)} holdings."
-                if spikes:
-                    ui.notify(f"{len(spikes)} name(s) spiking", color="positive")
-                return bool(spikes)
+                        else:
+                            ui.icon("check", color="grey").classes("text-sm")
+                            ui.label(f"{ticker} — clear").classes(
+                                "text-sm text-gray-500"
+                            )
+
+                await asyncio.gather(*(_run(t) for t in tickers))
+
+                # Collapse any sector-wide clusters (>=3 distress hits sharing
+                # a sector) discovered now that every ticker has resolved —
+                # replaces their individual rows with one combined row.
+                display_spikes = alerts.cluster_sector_hits(spikes)
+                for event in display_spikes:
+                    if event["kind"] != "sector":
+                        continue
+                    first, *rest = event["tickers"]
+                    box = row_boxes[first]
+                    box.clear()
+                    with box:
+                        ui.label(
+                            f"⚡ {event['sector']} ({', '.join(event['tickers'])})"
+                        ).classes("text-sm text-warning font-semibold")
+                    for ticker in rest:
+                        row_boxes[ticker].delete()
+
+                portfolio_status_label.text = (
+                    f"Checked {total} holdings — {len(display_spikes)} flagged."
+                )
+                if display_spikes:
+                    ui.notify(f"{len(display_spikes)} name(s) spiking", color="positive")
+                return bool(display_spikes)
             finally:
                 check_portfolio_button.text = "Check Portfolio for IV Spikes"
                 check_portfolio_button.enable()
