@@ -29,6 +29,13 @@ _SIGNAL_TICKERS: list[tuple[str, str, str]] = [
     ("IESC", "IES Holdings",  "Specialty electrical contractor — most direct data-center buildout play; revenue follows hyperscaler capex"),
     ("ACM",  "AECOM",         "Data-center construction/engineering — diversified; capex-cut sensitivity"),
     ("J",    "Jacobs Solutions", "Data-center construction/engineering — diversified; capex-cut sensitivity"),
+    # ── Macro regime / scenario-differentiation layer ───────────────────────
+    # DXY direction separates the two scenarios: falling = inflationary erosion;
+    # rising + equities falling = deflationary/crisis.
+    ("DX-Y.NYB", "US Dollar Index", "Scenario differentiator — falling: inflationary erosion; rising + equities down: crisis/deflation"),
+    ("HYG",  "High Yield Bonds",    "Credit leads equities by weeks — falling HYG is the earliest broad-market distress signal"),
+    ("LQD",  "Invest. Grade Bonds", "IG credit cracking = large event; confirms HYG signal when both fall together"),
+    ("TLT",  "20yr Treasuries",     "Flight-to-safety gauge — rising w/ equities down = deflationary; falling w/ equities down = inflationary"),
 ]
 
 # (symbol, short label, risk note, default NAV estimate)
