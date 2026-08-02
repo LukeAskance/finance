@@ -9,7 +9,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 
 import yfinance as yf
 from dotenv import load_dotenv
@@ -22,6 +22,7 @@ from analysis_module import PortfolioAnalysisEngine
 from positions import discover_equity_names, load_portfolio_positions
 from schwab_api import SchwabAPI, get_shared_api
 
+import tabs.ai_watch_tab as ai_watch_tab_mod
 import tabs.alerts_tab as alerts_tab_mod
 import tabs.analysis_tab as analysis_tab_mod
 import tabs.fred_tab as fred_tab_mod
@@ -123,10 +124,10 @@ def fetch_chain(symbol: str, contract_type: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _pe_ratio_for_row(p: Any) -> Any:
+def _pe_ratio_for_row(p: Any) -> Optional[float]:
     if p.position_type in {"CALL", "PUT", "OPTION", "Cash"}:
-        return "--"
-    return round(float(p.pe_ratio), 2) if p.pe_ratio else "--"
+        return None
+    return round(float(p.pe_ratio), 2) if p.pe_ratio else None
 
 
 def _underlying_symbol(value: Any) -> str:
@@ -276,7 +277,7 @@ def aggregate_rows_by_symbol(
                 "market_value": 0.0,
                 "pl": 0.0,
                 "pl_unknown": False,
-                "pe_ratio": row.get("pe_ratio", "--"),
+                "pe_ratio": row.get("pe_ratio"),
                 "div_yield": row.get("div_yield"),
             }
 
@@ -577,6 +578,7 @@ with ui.tabs().classes("w-full") as tabs:
     fred_tab = ui.tab("Fred")
     mcp_tab = ui.tab("MCP")
     alerts_tab = ui.tab("Alerts")
+    ai_watch_tab = ui.tab("AI Watch")
 
 with ui.tab_panels(tabs, value=dashboard_tab).classes("w-full"):
     with ui.tab_panel(dashboard_tab):
@@ -669,5 +671,7 @@ with ui.tab_panels(tabs, value=dashboard_tab).classes("w-full"):
     mcp_tab_mod.build(mcp_tab)
 
     _alerts_refs.update(alerts_tab_mod.build(alerts_tab, get_portfolio_equity_tickers))
+
+    ai_watch_tab_mod.build(ai_watch_tab)
 
 ui.run(port=8000, reload=False)
