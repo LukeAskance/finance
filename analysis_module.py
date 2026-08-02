@@ -12,76 +12,7 @@ from urllib import request as urlrequest
 
 import yfinance as yf
 
-import claude_client
-from institutional import get_institutional_ownership
 from positions import load_portfolio_positions
-
-
-# ---------------------------------------------------------------------------
-# Tool definitions exposed to the Claude tool-use API
-# ---------------------------------------------------------------------------
-_CLAUDE_TOOLS: list[dict] = [
-    {
-        "name": "get_institutional_ownership",
-        "description": (
-            "Get the top 10 institutional holders for a stock ticker, sorted by "
-            "percentage of shares outstanding. Use this when the user asks about "
-            "who owns a stock, institutional holders, major shareholders, or fund "
-            "ownership of any company."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "ticker": {
-                    "type": "string",
-                    "description": "The stock ticker symbol, e.g. 'AAPL' or 'MSFT'.",
-                }
-            },
-            "required": ["ticker"],
-        },
-    },
-    {
-        "name": "get_market_cap",
-        "description": (
-            "Get the current market capitalisation for a stock ticker. "
-            "Use this when the user asks about market cap, company size, "
-            "large-cap vs small-cap classification, or wants to compare "
-            "the size of companies in the portfolio."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "ticker": {
-                    "type": "string",
-                    "description": "The stock ticker symbol, e.g. 'AAPL' or 'WPC'.",
-                }
-            },
-            "required": ["ticker"],
-        },
-    },
-    {
-        "name": "get_price_history",
-        "description": (
-            "Get recent closing price history for a stock ticker. "
-            "Use this when the user asks about price performance, returns, "
-            "how a stock has moved, 52-week high/low, or trend over time."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "ticker": {
-                    "type": "string",
-                    "description": "The stock ticker symbol, e.g. 'AAPL'.",
-                },
-                "days": {
-                    "type": "integer",
-                    "description": "Number of calendar days of history to return (default 90).",
-                },
-            },
-            "required": ["ticker"],
-        },
-    },
-]
 
 
 @dataclass(slots=True)
@@ -384,103 +315,6 @@ class PortfolioAnalysisEngine:
     # Tool execution
     # ------------------------------------------------------------------
 
-    def _execute_tool(self, name: str, tool_input: dict) -> Any:
-        if name == "get_institutional_ownership":
-            return get_institutional_ownership(tool_input.get("ticker", ""))
-        if name == "get_market_cap":
-            import datetime
-            ticker = tool_input.get("ticker", "").upper()
-            info = yf.Ticker(ticker).info
-            if not (market_cap := info.get("marketCap")):
-                return {"error": f"No market cap data available for {ticker}"}
-            if market_cap >= 1_000_000_000_000:
-                market_cap_str = f"${market_cap / 1_000_000_000_000:.2f}T"
-            elif market_cap >= 1_000_000_000:
-                market_cap_str = f"${market_cap / 1_000_000_000:.2f}B"
-            else:
-                market_cap_str = f"${market_cap / 1_000_000:.2f}M"
-            return {
-                "symbol": ticker,
-                "date": datetime.date.today().isoformat(),
-                "market_cap": market_cap,
-                "market_cap_str": market_cap_str,
-            }
-        if name == "get_price_history":
-            import datetime
-            ticker = tool_input.get("ticker", "").upper()
-            days = int(tool_input.get("days", 90))
-            end = datetime.date.today()
-            start = end - datetime.timedelta(days=days)
-            hist = yf.Ticker(ticker).history(
-                start=start.isoformat(), end=end.isoformat()
-            )
-            if hist.empty:
-                return {"error": f"No price history returned for {ticker}"}
-            return [
-                {"date": str(d)[:10], "close": round(float(row["Close"]), 4)}
-                for d, row in hist.iterrows()
-            ]
-        return {"error": f"Unknown tool: {name}"}
-
-    # ------------------------------------------------------------------
-    # Claude with tool-use (multi-turn loop)
-    # ------------------------------------------------------------------
-
-    def _call_claude_with_tools(
-        self,
-        question: str,
-        model: str,
-        grounded_only: bool,
-        general_mode: bool = False,
-    ) -> tuple[str, dict[str, Any]]:
-        """Call Claude with tool-use support.
-
-        Returns (answer_text, tool_results) where tool_results maps
-        tool name → raw result data (e.g. {"get_institutional_ownership": [...]}).
-        """
-        snapshot = self._snapshot_payload()
-
-        if general_mode:
-            system = (
-                "You are a helpful financially aware assistant. You have access "
-                "to the user's portfolio data for context when relevant. "
-                "Be concise and include concrete symbols/values when available."
-            )
-        else:
-            grounding = (
-                "Answer ONLY using the provided portfolio snapshot data and any "
-                "tool results. If the answer is not available, say so explicitly."
-                if grounded_only
-                else "You may answer generally, but prioritize the provided "
-                "portfolio snapshot and any tool results when relevant."
-            )
-            system = (
-                "You are a portfolio analysis assistant. "
-                f"{grounding} "
-                "Be concise and include concrete symbols/values when available."
-            )
-
-        user_text = (
-            f"Here is my current portfolio for reference:\n"
-            f"{json.dumps(snapshot, indent=2)}\n\n{question}"
-            if general_mode
-            else f"Portfolio snapshot JSON:\n"
-            f"{json.dumps(snapshot, indent=2)}\n\nQuestion: {question}"
-        )
-
-        try:
-            result = claude_client.run_tool_loop(
-                [{"role": "user", "content": user_text}],
-                system=system,
-                tools=_CLAUDE_TOOLS,
-                execute_tool=self._execute_tool,
-                model=model,
-            )
-        except Exception as exc:
-            return f"Claude API call failed: {exc}", {}
-
-        return result.text, result.tool_results
-
     def _call_perplexity(
         self,
         question: str,
@@ -554,36 +388,28 @@ class PortfolioAnalysisEngine:
         except Exception as exc:
             return f"Perplexity API call failed: {exc}"
 
-    def ask_llm(
+    def ask_perplexity(
         self,
         question: str,
-        provider: str = "claude",
         model: str = "",
         grounded_only: bool = True,
         general_mode: bool = False,
-    ) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """Single-shot Perplexity call grounded in the static snapshot (no
+        live tools — Claude's tool-calling chat, wired up in analysis_tab.py
+        via tabs/mcp_tab.py, is the live/multi-turn path).
+        """
         q = question.strip()
         if not q:
-            return "Enter a question.", [], {}
+            return "Enter a question.", []
 
         if not self._snapshot:
-            return "Load a portfolio snapshot first.", [], {}
+            return "Load a portfolio snapshot first.", []
 
-        tool_results: dict[str, Any] = {}
-        provider_key = provider.strip().lower()
-        if provider_key == "perplexity":
-            use_model = model.strip() or "sonar"
-            answer = self._call_perplexity(
-                q, use_model, grounded_only, general_mode
-            )
-        else:
-            use_model = model.strip() or claude_client.DEFAULT_MODEL
-            answer, tool_results = self._call_claude_with_tools(
-                q, use_model, grounded_only, general_mode
-            )
-
+        use_model = model.strip() or "sonar"
+        answer = self._call_perplexity(q, use_model, grounded_only, general_mode)
         evidence_rows = self._rows(self._snapshot[:40]) if grounded_only else []
-        return answer, evidence_rows, tool_results
+        return answer, evidence_rows
 
     def answer_question(
         self, question: str

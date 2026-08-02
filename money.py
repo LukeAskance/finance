@@ -28,7 +28,6 @@ import tabs.analysis_tab as analysis_tab_mod
 import tabs.fred_tab as fred_tab_mod
 import tabs.historicals_tab as historicals_tab_mod
 import tabs.income_tab as income_tab_mod
-import tabs.mcp_tab as mcp_tab_mod
 import tabs.options_tab as options_tab_mod
 import tabs.portfolio_tab as portfolio_tab_mod
 
@@ -486,6 +485,12 @@ _historicals_refs: dict[str, Any] = {}
 _alerts_refs: dict[str, Any] = {}
 
 
+def _set_portfolio_table_rows(rows: list[dict[str, Any]]) -> None:
+    set_rows = _portfolio_refs.get("set_snapshot_rows")
+    if set_rows:
+        set_rows(rows)
+
+
 async def refresh_portfolio_snapshot_click() -> None:
     refresh_portfolio_snapshot_button.disable()
     refresh_portfolio_snapshot_button.text = "Refreshing..."
@@ -493,9 +498,7 @@ async def refresh_portfolio_snapshot_click() -> None:
     try:
         positions, rows = await ensure_portfolio_snapshot(force_refresh=True)
 
-        set_rows = _portfolio_refs.get("set_snapshot_rows")
-        if set_rows:
-            set_rows(rows)
+        _set_portfolio_table_rows(rows)
 
         analysis_table = _analysis_refs.get("analysis_rows_table")
         analysis_ans = _analysis_refs.get("analysis_answer")
@@ -576,7 +579,6 @@ with ui.tabs().classes("w-full") as tabs:
     income_tab = ui.tab("Income")
     analysis_tab = ui.tab("Analysis")
     fred_tab = ui.tab("Fred")
-    mcp_tab = ui.tab("MCP")
     alerts_tab = ui.tab("Alerts")
     ai_watch_tab = ui.tab("AI Watch")
 
@@ -663,12 +665,11 @@ with ui.tab_panels(tabs, value=dashboard_tab).classes("w-full"):
             analysis_tab,
             analysis_engine,
             ensure_portfolio_snapshot,
+            _set_portfolio_table_rows,
         )
     )
 
     fred_tab_mod.build(fred_tab)
-
-    mcp_tab_mod.build(mcp_tab)
 
     _alerts_refs.update(alerts_tab_mod.build(alerts_tab, get_portfolio_equity_tickers))
 
