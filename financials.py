@@ -106,7 +106,11 @@ def _dte(exp_key: str) -> int:
 
 
 def _iv_at_expiration(
-    put_map: dict, expiration: str, price: float, target_moneyness: float, ticker: str
+    put_map: dict,
+    expiration: str,
+    price: float,
+    target_moneyness: float,
+    ticker: str,
 ) -> Optional[float]:
     """Closest-to-target-moneyness strike among ones with real open interest.
     Schwab's "volatility" field still returns *some* number for a dead
@@ -122,7 +126,9 @@ def _iv_at_expiration(
         return None
 
     target_strike = price * target_moneyness
-    closest_strike = min(liquid_strikes, key=lambda k: abs(float(k) - target_strike))
+    closest_strike = min(
+        liquid_strikes, key=lambda k: abs(float(k) - target_strike)
+    )
     iv = strikes[closest_strike][0].get("volatility")
     return round(float(iv), 2) if iv else None
 
@@ -139,7 +145,9 @@ def get_otm_put_iv(api, ticker: str, target_moneyness: float = 0.90) -> float:
     # ponytail: fixed 10%-OTM / nearest-20+-DTE definition, not configurable —
     # add a moneyness/tenor knob if a specific alert ever needs a different one.
     """
-    return get_iv_term_structure(api, ticker, target_moneyness=target_moneyness)[0]
+    return get_iv_term_structure(
+        api, ticker, target_moneyness=target_moneyness
+    )[0]
 
 
 def get_iv_term_structure(
@@ -171,21 +179,39 @@ def get_iv_term_structure(
     """
     price, put_map = _fetch_put_chain(api, ticker)
 
-    near_candidates = sorted((k for k in put_map if _dte(k) >= near_days), key=_dte)
-    near_expiration = near_candidates[0] if near_candidates else min(put_map, key=_dte)
-    near_iv = _iv_at_expiration(put_map, near_expiration, price, target_moneyness, ticker)
+    near_candidates = sorted(
+        (k for k in put_map if _dte(k) >= near_days), key=_dte
+    )
+    near_expiration = (
+        near_candidates[0] if near_candidates else min(put_map, key=_dte)
+    )
+    near_iv = _iv_at_expiration(
+        put_map, near_expiration, price, target_moneyness, ticker
+    )
     if near_iv is None:
-        raise ValueError(f"No liquid put strikes for {ticker} {near_expiration}")
+        raise ValueError(
+            f"No liquid put strikes for {ticker} {near_expiration}"
+        )
     near_expiration_date = datetime.date.fromisoformat(
         near_expiration.rsplit(":", 1)[0]
     )
 
     far_expiration = min(put_map, key=lambda k: abs(_dte(k) - far_days))
     if _dte(far_expiration) < far_days / 2:
-        return near_iv, None, near_expiration_date  # nothing long-dated enough to call a "far" leg
+        return (
+            near_iv,
+            None,
+            near_expiration_date,
+        )  # nothing long-dated enough to call a "far" leg
 
-    far_iv = _iv_at_expiration(put_map, far_expiration, price, target_moneyness, ticker)
-    return near_iv, far_iv, near_expiration_date  # far_iv may legitimately be None if illiquid
+    far_iv = _iv_at_expiration(
+        put_map, far_expiration, price, target_moneyness, ticker
+    )
+    return (
+        near_iv,
+        far_iv,
+        near_expiration_date,
+    )  # far_iv may legitimately be None if illiquid
 
 
 def _next_earnings_date(t, info: dict) -> Optional[datetime.date]:
@@ -193,8 +219,12 @@ def _next_earnings_date(t, info: dict) -> Optional[datetime.date]:
     when present, else the calendar endpoint. Either can be missing/flaky
     depending on the ticker, so any failure just means "unknown", not fatal.
     """
-    ts = info.get("earningsTimestamp") or info.get("earningsTimestampStart")
-    if ts:
+    # ts = info.get("earningsTimestamp") or info.get("earningsTimestampStart")
+    # if ts:
+
+    if ts := info.get("earningsTimestamp") or info.get(
+        "earningsTimestampStart"
+    ):
         with suppress(Exception):
             return datetime.datetime.fromtimestamp(ts, tz=datetime.UTC).date()
     with suppress(Exception):
@@ -234,9 +264,11 @@ def get_financials(ticker: str) -> CompanyFinancials:
     otm_put_iv_near_expiration: Optional[datetime.date] = None
     otm_put_iv_error: Optional[str] = None
     try:
-        otm_put_iv_pct, otm_put_iv_180d_pct, otm_put_iv_near_expiration = (
-            get_iv_term_structure(get_shared_api(), ticker)
-        )
+        (
+            otm_put_iv_pct,
+            otm_put_iv_180d_pct,
+            otm_put_iv_near_expiration,
+        ) = get_iv_term_structure(get_shared_api(), ticker)
     except Exception as exc:
         otm_put_iv_error = str(exc)
 
@@ -286,7 +318,9 @@ def get_insider_transactions(
     company = Company(ticker.upper())
     filings = company.get_filings(form="4")
 
-    buys = sells = buys_shares = sells_shares = sells_10b51 = sells_10b51_shares = 0
+    buys = (
+        sells
+    ) = buys_shares = sells_shares = sells_10b51 = sells_10b51_shares = 0
 
     for f in filings[:n_filings]:
         if str(f.filing_date) < cutoff:
@@ -302,7 +336,7 @@ def get_insider_transactions(
         try:
             content = f.homepage.primary_xml_document.content or ""
             m = re.search(r"<aff10b5One>(\d+)</aff10b5One>", content)
-            if m and m.group(1) == "1":
+            if m and m[1] == "1":
                 is_10b51 = True
         except Exception:
             pass
@@ -396,7 +430,9 @@ if __name__ == "__main__":
 
     # no expiration far enough out to call a real "far" leg -> None, not a
     # misleading comparison against the 30d contract
-    near_iv, far_iv, near_exp = get_iv_term_structure(_FakeSchwabAPI(chain), "TEST")
+    near_iv, far_iv, near_exp = get_iv_term_structure(
+        _FakeSchwabAPI(chain), "TEST"
+    )
     assert near_iv == 40.0, near_iv
     assert far_iv is None, far_iv
     assert near_exp == today + datetime.timedelta(days=30), near_exp
@@ -413,7 +449,9 @@ if __name__ == "__main__":
             },
         },
     }
-    near_iv, far_iv, near_exp = get_iv_term_structure(_FakeSchwabAPI(chain_with_long), "TEST")
+    near_iv, far_iv, near_exp = get_iv_term_structure(
+        _FakeSchwabAPI(chain_with_long), "TEST"
+    )
     assert near_iv == 40.0, near_iv
     assert far_iv == 25.0, far_iv
     assert near_iv > far_iv  # backwardation: near-term distress signal
@@ -431,7 +469,9 @@ if __name__ == "__main__":
             },
         },
     }
-    near_iv, far_iv, near_exp = get_iv_term_structure(_FakeSchwabAPI(chain_illiquid_far), "TEST")
+    near_iv, far_iv, near_exp = get_iv_term_structure(
+        _FakeSchwabAPI(chain_illiquid_far), "TEST"
+    )
     assert near_iv == 40.0, near_iv
     assert far_iv is None, far_iv
 

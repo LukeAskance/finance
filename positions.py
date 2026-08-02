@@ -5,8 +5,10 @@ import glob
 import json
 import logging
 import os
+import re
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import date, datetime
 from tempfile import TemporaryDirectory
@@ -337,6 +339,21 @@ def fidelity_option_desc_to_schwab_symbol(desc: str) -> str:
     )
 
 
+def fidelity_preferred_symbol_to_schwab_symbol(symbol: str) -> str:
+    """Fidelity glues a preferred-stock series onto its ticker with no
+    separator (SCEPRL); Schwab quotes the same issue with a slash before the
+    PR (SCE/PRL).
+
+    # ponytail: assumes the common TICKER + PR + 1-2 letter series shape —
+    # widen the regex if a preferred symbol shows up that doesn't match it.
+    """
+    m = re.match(r"^([A-Z]+?)PR([A-Z]{1,2})$", symbol)
+    if not m:
+        raise ValueError(f"Unrecognized preferred-stock symbol format: {symbol}")
+    base, series = m.groups()
+    return f"{base}/PR{series}"
+
+
 def _discover_schwab_position_seeds(
     api: QuoteFundamentalsAPI,
     account_mapping: Optional[dict[str, str]] = None,
@@ -527,6 +544,9 @@ def _discover_fidelity_position_seeds(
                 symbol = fidelity_option_desc_to_schwab_symbol(description)
                 strike_price = _safe_optional_float(split_desc[4][1:])
                 dte = _dte_from_yyyymmdd(symbol[6:12])
+            elif (row.get("security subtype") or "").strip() == "Preferred Stock":
+                with suppress(ValueError):
+                    symbol = fidelity_preferred_symbol_to_schwab_symbol(symbol)
 
             underlying = description.split(" ")[0] if description else symbol
             position_type = option_type or "EQUITY"
@@ -887,6 +907,11 @@ def test_load_portfolio_positions() -> None:
                         "eps": 11.0,
                     },
                 )
+            if symbol == "SCE/PRL":
+                return (
+                    {"lastPrice": 16.9, "52WeekHigh": 18.0, "52WeekLow": 15.0},
+                    {"divPayAmount": 0.3125, "divFreq": 4, "divYield": 7.4},
+                )
             return None, None
 
         def get_quote(
@@ -923,6 +948,7 @@ def test_load_portfolio_positions() -> None:
                     "Current Value",
                     "Quantity",
                     "Average Cost Basis",
+                    "Security Subtype",
                 ],
             )
             writer.writeheader()
@@ -953,6 +979,16 @@ def test_load_portfolio_positions() -> None:
                     "Average Cost Basis": "$5.00",
                 }
             )
+            writer.writerow(
+                {
+                    "Symbol": "SCEPRL",
+                    "Description": "SCE TRUST VI TR PREF SECS 5.00000% PFD",
+                    "Current Value": "$8460.00",
+                    "Quantity": "500",
+                    "Average Cost Basis": "$16.80",
+                    "Security Subtype": "Preferred Stock",
+                }
+            )
 
         positions = load_portfolio_positions(
             api=MockAPI(),
@@ -966,6 +1002,10 @@ def test_load_portfolio_positions() -> None:
     assert any(p.symbol == "MSFT" for p in positions)
     assert any(p.position_type in {"CALL", "PUT", "OPTION"} for p in positions)
     assert any(p.position_type == "Cash" for p in positions)
+    # Fidelity's bare "SCEPRL" gets converted to Schwab's "SCE/PRL" before the
+    # quote lookup, so a real quote comes back instead of last_price=0.
+    sce = next(p for p in positions if p.symbol == "SCE/PRL")
+    assert sce.last_price == 16.9, sce.last_price
 
 
 def get_client() -> Any:
